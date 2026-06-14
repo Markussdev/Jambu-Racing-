@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sorteio - Rifa Jambu Racing</title>
+    <meta name="description" content="Sorteio da Rifa Jambu Racing - Descubra o número ganhador!">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <link href="https://db.onlinewebfonts.com/c/3d9baeab120f944c61f043b21730bb51?family=Intro+Rust+G+Base" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="sorteio.css">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+</head>
+<body>
+    <!-- Background -->
+    <div class="bg-raffle">
+        <div class="overlay">
+            <!-- Header -->
+            <header class="header">
+                <div class="container">
+                    <div class="header-content">
+                        <!-- Logo -->
+                        <div class="logo-section">
+                            <img src="jambu.png" alt="Logo Jambu Racing" class="logo">
+                            <div class="logo-text">
+                                <h1 class="title">SORTEIO JAMBU RACING</h1>
+                                <p class="subtitle">Descubra o número ganhador!</p>
+                            </div>
+                        </div>
+
+                        <!-- Prize Info -->
+                        <div class="prize-info glass-effect">
+                            <img src="logo-jambu.png" alt="Arte Jambu Racing" class="prize-image">
+                            <div class="prize-amount">INSERIR PREMIO AQUI</div>
+                            <div class="prize-label">Prêmio Principal</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Main Content -->
+            <main class="main">
+                <div class="container">
+                    <!-- Estatísticas -->
+                    <div class="stats-section glass-effect only-participants">
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <div class="stat-number" id="total-sold">0</div>
+                                <div class="stat-label">Números Vendidos</div>
+                            </div>
+                            <div class="stat-item participants">
+                                <div class="stat-number" id="total-participants">0</div>
+                                <div class="stat-label">Participantes</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-number" id="total-revenue">R$ 0,00</div>
+                                <div class="stat-label">Arrecadado</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Área do Sorteio -->
+                    <div class="sorteio-container">
+                        <!-- Display do Número Sorteado -->
+                        <div class="winner-display glass-effect">
+                            <div class="winner-title">NÚMERO GANHADOR</div>
+                            <div class="winner-number" id="winner-number">?</div>
+                            <div class="winner-info" id="winner-info" style="display: none;">
+                                <div class="winner-name" id="winner-name"></div>
+                                <div class="winner-phone" id="winner-phone"></div>
+                            </div>
+                        </div>
+
+                        <!-- Controles do Sorteio -->
+                        <div class="sorteio-controls glass-effect">
+                            <button class="btn-sorteio" id="btn-sortear" onclick="sorteioManager.iniciarSorteio()">
+                                🎲 REALIZAR SORTEIO
+                            </button>
+                            <button class="btn-reset" id="btn-reset" onclick="sorteioManager.resetarSorteio()" style="display: none;">
+                                🔄 NOVO SORTEIO
+                            </button>
+                        </div>
+
+                        <!-- Números Participantes -->
+                        <div class="participantes-section glass-effect">
+                            <h3 class="section-title">Números Participantes</h3>
+                            <div class="participantes-count">
+                                <span id="participantes-count">Carregando números vendidos...</span>
+                            </div>
+                            <div class="numeros-grid" id="numeros-participantes">
+                                <!-- Números serão carregados aqui -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Botão Voltar -->
+                    <div class="back-section">
+                        <a href="admin.html" class="btn-back">
+                            ← Voltar ao Admin
+                        </a>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Footer -->
+            <footer class="footer">
+                <div class="container">
+                    <div class="footer-content">
+                        <div class="footer-info">
+                            <p>© 2026 Jambu Racing</p>
+                            <p>Sorteio autorizado</p>
+                        </div>
+                        <div class="footer-contact">
+                            <p>Suporte: INSERIR TELEFONE AQUI</p>
+                            <p>Email: INSERIR EMAIL AQUI</p>
+                        </div>
+                    </div>
+                </div>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Modal de Resultado -->
+    <div class="modal-overlay" id="resultado-modal">
+        <div class="modal glass-effect">
+            <div class="modal-header">
+                <h3 class="modal-title">🎉 PARABÉNS AO GANHADOR!</h3>
+                <button class="modal-close" id="modal-close" onclick="sorteioManager.fecharModal()">&times;</button>
+            </div>
+            <div class="modal-content" id="modal-content">
+                <!-- Conteúdo será preenchido pelo JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Button para mostrar 20 números sorteados (sessão) -->
+    <button id="btn-sorteados" class="btn-sorteados" onclick="sorteioManager.toggleSorteadosPanel()" title="Mostrar 20 números sorteados">📋 20 Sorteados</button>
+
+    <!-- Painel flutuante com a lista dos 20 números sorteados (reseta ao recarregar a página) -->
+    <div id="sorteados-panel" class="sorteados-panel" aria-hidden="true">
+        <div class="sorteados-header">
+            <div class="title">Números Sorteados <span id="sorteados-count">0 / 20</span></div>
+            <div class="actions">
+                <button class="close" onclick="sorteioManager.toggleSorteadosPanel()">✕</button>
+            </div>
+        </div>
+        <div id="sorteados-list" class="sorteados-list">
+            <!-- Lista preenchida dinamicamente -->
+        </div>
+        <div class="sorteados-footer">
+            <button class="btn-clear" onclick="sorteioManager.clearSorteadosSession()">Limpar sessão</button>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="firebase-config.js"></script>
+    <script src="initialize-firestore.js"></script>
+    <script src="sorteio.js"></script>
+</body>
+</html>

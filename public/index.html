@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rifa Jambu Racing</title>
+    <meta name="description" content="Participe da Rifa Jambu Racing e apoie a equipe nas pistas. Números de R$ 15,00 cada.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <link href="https://db.onlinewebfonts.com/c/3d9baeab120f944c61f043b21730bb51?family=Intro+Rust+G+Base" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+</head>
+<body>
+    <!-- Background -->
+    <div class="bg-raffle">
+        <div class="overlay">
+            <!-- Header -->
+            <header class="header">
+                <div class="container">
+                    <div class="header-content">
+                        <!-- Logo -->
+                        <div class="logo-section">
+                            <img src="logo-jambu.png" alt="Logo Jambu Racing" class="logo">
+                            <div class="logo-text">
+                                <h1 class="title">RIFA JAMBU RACING</h1>
+                                <p class="subtitle">Apoie a equipe nas pistas!</p>
+                            </div>
+                        </div>
+
+                        <!-- Prize Info -->
+                        <div class="prize-info glass-effect">
+                            <!-- Prize image -->
+                            <img src="logo-jambu.png" alt="Arte Jambu Racing" class="prize-image">
+                            <div class="prize-amount">INSERIR PREMIO AQUI</div>
+                            <div class="prize-label">Prêmio Principal</div>
+                            <div class="prize-details">500 números • R$ 15 cada</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Main Content -->
+            <main class="main">
+                <div class="container">
+                    <div class="content-grid">
+                        <!-- Numbers Section -->
+                        <div class="numbers-section">
+                            <div class="section-header">
+                                <h2 class="section-title">Escolha seus números da sorte</h2>
+                                <p class="section-description">Clique nos números para selecioná-los. Cada número custa R$ 15,00.</p>
+                            </div>
+
+                            <!-- Stats -->
+                            <div class="stats-grid">
+                                <div class="stat-card glass-effect">
+                                    <div class="stat-number" id="available-count">500</div>
+                                    <div class="stat-label">Disponíveis</div>
+                                </div>
+                                <div class="stat-card glass-effect">
+                                    <div class="stat-number selected-color" id="selected-count">0</div>
+                                    <div class="stat-label">Selecionados</div>
+                                </div>
+                                <div class="stat-card glass-effect">
+                                    <div class="stat-number reserved-color" id="reserved-count">0</div>
+                                    <div class="stat-label">Reservados</div>
+                                </div>
+                                <div class="stat-card glass-effect">
+                                    <div class="stat-number sold-color" id="sold-count">0</div>
+                                    <div class="stat-label">Vendidos</div>
+                                </div>
+                            </div>
+
+                            <!-- Legend -->
+                            <div class="legend">
+                                <div class="legend-item">
+                                    <div class="legend-color available"></div>
+                                    <span>Disponível</span>
+                                </div>
+                                <div class="legend-item">
+                                    <div class="legend-color selected"></div>
+                                    <span>Selecionado</span>
+                                </div>
+                                <div class="legend-item">
+                                    <div class="legend-color reserved"></div>
+                                    <span>Reservado</span>
+                                </div>
+                                <div class="legend-item">
+                                    <div class="legend-color sold"></div>
+                                    <span>Vendido</span>
+                                </div>
+                            </div>
+
+                            <!-- Numbers Grid -->
+                            <div class="numbers-container glass-effect">
+                                <div class="numbers-grid" id="numbers-grid">  
+                                </div>
+                            </div>
+                            <!-- Quick Actions -->
+                            <div class="quick-actions">
+                                <button class="btn btn-outline" id="surprise-btn">Surpresa (1 número)</button>
+                                <button class="btn btn-outline" id="clear-btn">Limpar Seleção</button>
+                            </div>
+                        </div>
+                        <!-- Cart Section -->
+                        <div class="cart-section">
+                            <div class="cart-sticky">
+                                <div class="cart-card glass-effect" id="cart-card">
+                                    <!-- Cart content will be updated by JavaScript -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+            <!-- Footer -->
+            <footer class="footer">
+                <div class="container">
+                    <div class="footer-content">
+                        <div class="footer-info">
+                            <p>© 2026 Jambu Racing</p>
+                            <p>Rifa autorizada</p>
+                        </div>
+                        <div class="footer-contact">
+                            <p>Suporte: INSERIR TELEFONE AQUI</p>
+                            <p>Email: INSERIR EMAIL AQUI</p>
+                        </div>
+                    </div>
+                </div>
+            </footer>
+        </div>
+    </div>
+    <div class="modal-overlay" id="payment-modal">
+        <div class="modal glass-effect">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modal-title">Finalize seu Pagamento</h3>
+                <button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-content" id="modal-content">
+                <!-- Modal content will be updated by JavaScript -->
+            </div>
+        </div>
+    </div>
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Firebase SDKs -->
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="firebase-config.js"></script>
+    <script src="initialize-firestore.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

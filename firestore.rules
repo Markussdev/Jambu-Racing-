@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 🔹 Coleção de números da rifa
+    match /raffleNumbers/{number} {
+      allow read: if true; // qualquer um pode ler
+      
+      // Permitir criação e atualização para todos (necessário para reservas)
+      allow create: if true;
+      allow update: if true;
+      
+      // Apenas admin pode deletar números
+      allow delete: if request.auth != null && 
+        request.auth.token.admin == true;
+    }
+
+    // 🔹 Coleção de transações (reservas/pagamentos)
+    match /transactions/{transaction} {
+      // Usuário pode criar uma transação (reserva/pagamento)
+      allow create: if true;
+      allow read: if true;
+
+      // Permitir atualização para adicionar comprovantes
+      allow update: if true;
+      
+      // Somente admin pode deletar transações
+      allow delete: if request.auth != null &&
+        request.auth.token.admin == true;
+    }
+
+    // 🔹 Coleção de configurações (para controle manual)
+    match /config/{document} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}
