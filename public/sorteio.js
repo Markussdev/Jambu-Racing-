@@ -1,8 +1,9 @@
 // Dados da equipe. Troque os placeholders antes de publicar.
 const JAMBU_SORTEIO_CONFIG = {
     raffleName: 'Rifa Jambu Racing',
-    prizeName: 'INSERIR PREMIO AQUI',
-    whatsappNumber: 'INSERIR_NUMERO_WHATSAPP_AQUI'
+    prizeName: '2 premios de R$ 250,00',
+    pricePerNumber: 3,
+    whatsappNumber: '559186065036'
 };
 
 // Gerenciador do Sorteio
@@ -69,11 +70,14 @@ class SorteioManager {
     atualizarEstatisticas() {
         const totalVendidos = this.numerosVendidos.length;
         const totalParticipantes = this.participantes.size;
-        const totalArrecadado = totalVendidos * 15;
+        const totalArrecadado = totalVendidos * JAMBU_SORTEIO_CONFIG.pricePerNumber;
 
         document.getElementById('total-sold').textContent = totalVendidos;
         document.getElementById('total-participants').textContent = totalParticipantes;
-        document.getElementById('total-revenue').textContent = `R$ ${totalArrecadado.toFixed(2)}`;
+        document.getElementById('total-revenue').textContent = totalArrecadado.toLocaleString('pt-BR', {
+            style: 'currency',
+            currency: 'BRL'
+        });
     }
 
     renderizarNumerosParticipantes() {

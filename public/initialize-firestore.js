@@ -1,4 +1,13 @@
 // Inicialização e configuração do Firestore
+const JAMBU_RAFFLE_CONFIG = {
+    totalNumbers: 1000,
+    pricePerNumber: 3,
+    title: 'Rifa Jambu Racing',
+    prize: '2 premios de R$ 250,00',
+    pixKey: 'equipebajanazare@gmail.com',
+    whatsappNumber: '559186065036'
+};
+
 class FirestoreInitializer {
     constructor() {
         this.db = firebase.firestore();
@@ -16,6 +25,8 @@ class FirestoreInitializer {
             if (!configDoc.exists) {
                 console.log('Criando configuração inicial...');
                 await this.createInitialConfig();
+            } else {
+                await this.updateRaffleConfig();
             }
             
             // Verificar se números já foram inicializados
@@ -24,6 +35,8 @@ class FirestoreInitializer {
             if (numbersSnapshot.empty) {
                 console.log('Inicializando números da rifa...');
                 await this.initializeNumbers();
+            } else {
+                await this.ensureNumbersRange();
             }
             
             this.initialized = true;
@@ -37,21 +50,24 @@ class FirestoreInitializer {
 
     async createInitialConfig() {
         await this.db.collection('config').doc('raffle').set({
-            totalNumbers: 500,
-            pricePerNumber: 15,
-            title: 'Rifa Jambu Racing',
-            prize: 'INSERIR PREMIO AQUI',
-            pixKey: 'INSERIR_CHAVE_PIX_AQUI',
-            whatsappNumber: 'INSERIR_NUMERO_WHATSAPP_AQUI',
+            ...JAMBU_RAFFLE_CONFIG,
             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
             lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
         });
     }
 
+    async updateRaffleConfig() {
+        await this.db.collection('config').doc('raffle').set({
+            ...JAMBU_RAFFLE_CONFIG,
+            lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+    }
+
     async initializeNumbers() {
-        const batch = this.db.batch();
+        let batch = this.db.batch();
+        let operationCount = 0;
         
-        for (let i = 1; i <= 500; i++) {
+        for (let i = 1; i <= JAMBU_RAFFLE_CONFIG.totalNumbers; i++) {
             const numberRef = this.db.collection('raffleNumbers').doc(i.toString());
             batch.set(numberRef, {
                 number: i,
@@ -62,10 +78,63 @@ class FirestoreInitializer {
                 soldAt: null,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
             });
+
+            operationCount++;
+            if (operationCount === 500) {
+                await batch.commit();
+                batch = this.db.batch();
+                operationCount = 0;
+            }
         }
         
-        await batch.commit();
-        console.log('500 números inicializados no Firestore');
+        if (operationCount > 0) {
+            await batch.commit();
+        }
+        console.log(`${JAMBU_RAFFLE_CONFIG.totalNumbers} numeros inicializados no Firestore`);
+    }
+
+    async ensureNumbersRange() {
+        const snapshot = await this.db.collection('raffleNumbers').get();
+        const existingNumbers = new Set();
+
+        snapshot.forEach(doc => {
+            existingNumbers.add(parseInt(doc.id, 10));
+        });
+
+        let batch = this.db.batch();
+        let operationCount = 0;
+        let createdCount = 0;
+
+        for (let i = 1; i <= JAMBU_RAFFLE_CONFIG.totalNumbers; i++) {
+            if (existingNumbers.has(i)) continue;
+
+            const numberRef = this.db.collection('raffleNumbers').doc(i.toString());
+            batch.set(numberRef, {
+                number: i,
+                status: 'available',
+                buyerInfo: null,
+                reservedAt: null,
+                reservedUntil: null,
+                soldAt: null,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            operationCount++;
+            createdCount++;
+            if (operationCount === 500) {
+                await batch.commit();
+                batch = this.db.batch();
+                operationCount = 0;
+            }
+        }
+
+        if (operationCount > 0) {
+            await batch.commit();
+        }
+
+        if (createdCount > 0) {
+            console.log(`${createdCount} numeros adicionais criados no Firestore`);
+        }
     }
 
     // Função para adicionar venda manual
@@ -96,7 +165,7 @@ class FirestoreInitializer {
             await this.db.collection('transactions').add({
                 numbers: [parseInt(number)],
                 buyerInfo: buyerInfo,
-                totalValue: 15,
+                totalValue: JAMBU_RAFFLE_CONFIG.pricePerNumber,
                 status: 'confirmed',
                 paymentMethod: 'manual',
                 manualEntry: true,
@@ -141,7 +210,7 @@ class FirestoreInitializer {
             await this.db.collection('transactions').add({
                 numbers: [parseInt(number)],
                 buyerInfo: buyerInfo,
-                totalValue: 15,
+                totalValue: JAMBU_RAFFLE_CONFIG.pricePerNumber,
                 status: 'reserved',
                 paymentMethod: 'manual_reserve',
                 manualReserve: true,

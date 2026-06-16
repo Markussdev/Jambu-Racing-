@@ -1,10 +1,12 @@
 // Dados da equipe. Troque os placeholders antes de publicar.
 const JAMBU_SITE_CONFIG = {
     raffleName: 'Rifa Jambu Racing',
-    prizeName: 'INSERIR PREMIO AQUI',
-    pixKey: 'INSERIR_CHAVE_PIX_AQUI',
-    whatsappNumber: 'INSERIR_NUMERO_WHATSAPP_AQUI',
-    whatsappDisplay: 'INSERIR TELEFONE AQUI'
+    prizeName: '2 premios de R$ 250,00',
+    totalNumbers: 1000,
+    pricePerNumber: 3,
+    pixKey: 'equipebajanazare@gmail.com',
+    whatsappNumber: '559186065036',
+    whatsappDisplay: '+55 91 8606-5036'
 };
 
 // Firebase Integration
@@ -197,7 +199,8 @@ class RaffleManager {
     constructor() {
         this.numbers = new Map();
         this.selectedNumbers = new Set();
-        this.pricePerNumber = 15;
+        this.totalNumbers = JAMBU_SITE_CONFIG.totalNumbers;
+        this.pricePerNumber = JAMBU_SITE_CONFIG.pricePerNumber;
         this.currentOrder = null;
         this.confirmationData = null;
         
@@ -244,7 +247,7 @@ class RaffleManager {
             } else {
                 // Carregar números existentes
                 console.log('Carregando números existentes...');
-                for (let i = 1; i <= 500; i++) {
+                for (let i = 1; i <= this.totalNumbers; i++) {
                     const numberData = numbersData[i.toString()] || {
                         number: i,
                         status: 'available',
@@ -264,9 +267,10 @@ class RaffleManager {
     async initializeFirestoreNumbers() {
         try {
             // Usar batches para escrever em lotes (máximo 500 operações por batch)
-            const batch = this.firebase.db.batch();
+            let batch = this.firebase.db.batch();
+            let operationCount = 0;
             
-            for (let i = 1; i <= 500; i++) {
+            for (let i = 1; i <= this.totalNumbers; i++) {
                 const numberRef = this.firebase.db.collection('raffleNumbers').doc(i.toString());
                 const numberData = {
                     number: i,
@@ -277,10 +281,19 @@ class RaffleManager {
                 };
                 batch.set(numberRef, numberData);
                 this.numbers.set(i, numberData);
+
+                operationCount++;
+                if (operationCount === 500) {
+                    await batch.commit();
+                    batch = this.firebase.db.batch();
+                    operationCount = 0;
+                }
             }
             
-            await batch.commit();
-            console.log('Números inicializados no Firestore');
+            if (operationCount > 0) {
+                await batch.commit();
+            }
+            console.log(`${this.totalNumbers} numeros inicializados no Firestore`);
         } catch (error) {
             console.error('Erro ao inicializar Firestore:', error);
             this.initializeLocalNumbers();
@@ -289,7 +302,7 @@ class RaffleManager {
 
     initializeLocalNumbers() {
         console.log('Inicializando números localmente...');
-        for (let i = 1; i <= 500; i++) {
+        for (let i = 1; i <= this.totalNumbers; i++) {
             this.numbers.set(i, {
                 number: i,
                 status: 'available',
@@ -344,14 +357,14 @@ class RaffleManager {
         
         grid.innerHTML = '';
         
-        for (let i = 1; i <= 500; i++) {
+        for (let i = 1; i <= this.totalNumbers; i++) {
             const button = document.createElement('button');
             button.className = 'number-btn available';
             button.textContent = i;
             button.addEventListener('click', () => this.toggleNumber(i));
             grid.appendChild(button);
         }
-        console.log('Grade de números gerada com 500 números');
+        console.log(`Grade de numeros gerada com ${this.totalNumbers} numeros`);
     }
 
     toggleNumber(number) {
@@ -388,7 +401,7 @@ class RaffleManager {
             .map(n => n.number);
         
         if (available.length === 0) {
-            available = Array.from({length: 500}, (_, i) => i + 1)
+            available = Array.from({length: this.totalNumbers}, (_, i) => i + 1)
                 .filter(n => !this.selectedNumbers.has(n));
         }
         
@@ -430,6 +443,13 @@ class RaffleManager {
         this.updateCart();
     }
 
+    formatCurrency(value) {
+        return value.toLocaleString('pt-BR', {
+            style: 'currency',
+            currency: 'BRL'
+        });
+    }
+
     updateStats() {
         if (this.numbers.size > 0) {
             const available = Array.from(this.numbers.values()).filter(n => n.status === 'available').length;
@@ -444,7 +464,7 @@ class RaffleManager {
         } else {
             // Valores padrão até carregar do Firebase
             const selected = this.selectedNumbers.size;
-            document.getElementById('available-count').textContent = 500 - selected;
+            document.getElementById('available-count').textContent = this.totalNumbers - selected;
             document.getElementById('selected-count').textContent = selected;
             document.getElementById('reserved-count').textContent = 0;
             document.getElementById('sold-count').textContent = 0;
@@ -509,7 +529,7 @@ class RaffleManager {
                 <div class="cart-empty">
                     <div class="cart-icon">🛒</div>
                     <p style="color: #d1d5db;">Selecione os números para participar da rifa</p>
-                    <p style="color: #9ca3af; font-size: 0.875rem; margin-top: 8px;">Cada número custa R$ 15,00</p>
+                    <p style="color: #9ca3af; font-size: 0.875rem; margin-top: 8px;">Cada número custa ${this.formatCurrency(this.pricePerNumber)}</p>
                 </div>
             `;
             return;
@@ -538,11 +558,11 @@ class RaffleManager {
                 </div>
                 <div class="summary-row">
                     <span>Valor unitário:</span>
-                    <span>R$ 15,00</span>
+                    <span>${this.formatCurrency(this.pricePerNumber)}</span>
                 </div>
                 <div class="summary-total">
                     <span>Total:</span>
-                    <span class="total-amount">R$ ${totalValue.toFixed(2)}</span>
+                    <span class="total-amount">${this.formatCurrency(totalValue)}</span>
                 </div>
             </div>
             
@@ -588,7 +608,7 @@ class RaffleManager {
                 </div>
                 <div class="summary-row">
                     <span>Valor total:</span>
-                    <span style="color: #10b981; font-weight: bold;">R$ ${totalValue.toFixed(2)}</span>
+                    <span style="color: #10b981; font-weight: bold;">${this.formatCurrency(totalValue)}</span>
                 </div>
                 <div style="margin-top: 12px;">
                     <div class="numbers-list">${numbersHtml}</div>
@@ -627,7 +647,7 @@ class RaffleManager {
                     
                     <div class="pix-info">
                         <div class="qr-code">
-                            <div class="qr-placeholder">INSERIR QR CODE PIX AQUI</div>
+                            <img src="qr-code-pix.png" alt="QR Code PIX">
                         </div>
                         
                         <div class="pix-details">
@@ -643,7 +663,7 @@ class RaffleManager {
                             <div class="pix-field">
                                 <label class="pix-label">Valor:</label>
                                 <div class="pix-input-group">
-                                    <div class="pix-value">R$ ${totalValue.toFixed(2)}</div>
+                                    <div class="pix-value">${this.formatCurrency(totalValue)}</div>
                                     <button type="button" class="copy-btn" onclick="raffleManager.copyToClipboard('${totalValue.toFixed(2)}', 'Valor')">
                                         📋
                                     </button>
@@ -684,7 +704,7 @@ class RaffleManager {
                                 <strong>Enviar mensagem diretamente:</strong>
                             </p>
                             <p style="font-size: 0.75rem; color: #9ca3af;" id="suggested-message">
-                                Olá! Realizei o pagamento da ${JAMBU_SITE_CONFIG.raffleName}. Números: ${selectedArray.join(', ')}. Valor: R$ ${totalValue.toFixed(2)}
+                                Olá! Realizei o pagamento da ${JAMBU_SITE_CONFIG.raffleName}. Números: ${selectedArray.join(', ')}. Valor: ${this.formatCurrency(totalValue)}
                             </p>
                             <button type="button" class="btn btn-success" onclick="raffleManager.openWhatsApp()" style="margin-top: 8px; width: 100%;">
                                 📱 Abrir WhatsApp
@@ -728,7 +748,7 @@ class RaffleManager {
         }
         
         message += `*Números:* ${selectedArray.join(', ')}\n`;
-        message += `*Valor:* R$ ${totalValue.toFixed(2)}\n\n`;
+        message += `*Valor:* ${this.formatCurrency(totalValue)}\n\n`;
         message += `Anexo: comprovante de pagamento`;
         
         // Codificar a mensagem para URL
@@ -916,7 +936,7 @@ class RaffleManager {
                     </div>
                     <div class="summary-row">
                         <span>Valor:</span>
-                        <span style="color: #10b981;">R$ ${(numbers.length * this.pricePerNumber).toFixed(2)}</span>
+                        <span style="color: #10b981;">${this.formatCurrency(numbers.length * this.pricePerNumber)}</span>
                     </div>
                     <div class="summary-row">
                         <span>ID do pedido:</span>
@@ -959,7 +979,7 @@ class RaffleManager {
         message += `*Nome:* ${buyerInfo.firstName} ${buyerInfo.lastName}\n`;
         message += `*Telefone:* ${buyerInfo.phone}\n`;
         message += `*Números:* ${numbers.join(', ')}\n`;
-        message += `*Valor:* R$ ${totalValue.toFixed(2)}\n`;
+        message += `*Valor:* ${this.formatCurrency(totalValue)}\n`;
         message += `*ID do Pedido:* ${'local-' + Date.now()}\n\n`;
         message += `Segue em anexo o comprovante de pagamento.`;
         

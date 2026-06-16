@@ -3,6 +3,7 @@ class AdminPanel {
     constructor() {
         this.db = firebase.firestore();
         this.storage = firebase.storage();
+        this.pricePerNumber = 3;
         this.currentFilter = 'all';
         this.transactions = [];
         this.init();
@@ -173,8 +174,13 @@ class AdminPanel {
         if (totalElement) totalElement.textContent = stats.total;
         
         // Calcular faturamento total (incluindo vendas manuais)
-        const totalRevenue = stats.sold * 15;
-        if (revenueElement) revenueElement.textContent = `R$ ${totalRevenue.toFixed(2)}`;
+        const totalRevenue = stats.sold * this.pricePerNumber;
+        if (revenueElement) {
+            revenueElement.textContent = totalRevenue.toLocaleString('pt-BR', {
+                style: 'currency',
+                currency: 'BRL'
+            });
+        }
         
         console.log('Stats atualizadas:', stats, 'Faturamento:', totalRevenue);
     }
