@@ -651,7 +651,7 @@ class RaffleManager {
         
         const selectedArray = Array.from(this.selectedNumbers).sort((a, b) => a - b);
         const numbersHtml = selectedArray.map(num => 
-            `<span class="number-badge">${num}</span>`
+            `<span class="number-badge">${num.toString().padStart(3, '0')}</span>`
         ).join('');
         
         cartCard.innerHTML = `
@@ -687,9 +687,9 @@ class RaffleManager {
             </div>
             
             <div class="cart-info">
-                <p>• Você terá 24 horas para enviar o comprovante</p>
+                <p>• Você terá 24 horas para enviar o comprovante pelo WhatsApp</p>
                 <p>• Os números ficarão reservados durante este período</p>
-                <p>• Após a confirmação, os números serão confirmados</p>
+                <p>• Após a confirmação da equipe, os números serão marcados como vendidos</p>
             </div>
         `;
     }
@@ -708,7 +708,7 @@ class RaffleManager {
         
         const selectedArray = Array.from(this.selectedNumbers).sort((a, b) => a - b);
         const numbersHtml = selectedArray.map(num => 
-            `<span class="number-badge">${num}</span>`
+            `<span class="number-badge">${num.toString().padStart(3, '0')}</span>`
         ).join('');
         
         const totalValue = selectedArray.length * this.pricePerNumber;
@@ -944,7 +944,7 @@ class RaffleManager {
         modalTitle.textContent = 'Pedido Finalizado!';
 
         const numbersHtml = numbers.map(num =>
-            `<span class="number-badge" style="background: rgba(250, 204, 21, 0.2); color: #facc15; border-color: rgba(250, 204, 21, 0.3);">${num}</span>`
+            `<span class="number-badge" style="background: rgba(250, 204, 21, 0.2); color: #facc15; border-color: rgba(250, 204, 21, 0.3);">${num.toString().padStart(3, '0')}</span>`
         ).join('');
 
         modalContent.innerHTML = `
