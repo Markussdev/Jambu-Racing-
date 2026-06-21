@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
     <link href="https://db.onlinewebfonts.com/c/3d9baeab120f944c61f043b21730bb51?family=Intro+Rust+G+Base" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=2">
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
     <link rel="icon" href="favicon.ico" sizes="any">
@@ -95,15 +95,51 @@
                                 </div>
                             </div>
 
-                            <!-- Numbers Grid -->
-                            <div class="numbers-container glass-effect">
-                                <div class="numbers-grid" id="numbers-grid">  
+                            <!-- Cartelas / faixas -->
+                            <div class="range-panel glass-effect">
+                                <div class="range-header">
+                                    <span class="range-kicker">Cartelas disponíveis</span>
+                                    <h3>Escolha uma faixa de números</h3>
+                                    <p></p>
+                                </div>
+
+                                <div class="range-tabs" id="range-tabs">
+                                    <button class="range-tab active" data-start="1" data-end="200">
+                                        <strong>001–200</strong>
+                                        <span>Cartela 1</span>
+                                    </button>
+
+                                    <button class="range-tab" data-start="201" data-end="400">
+                                        <strong>201–400</strong>
+                                        <span>Cartela 2</span>
+                                    </button>
+
+                                    <button class="range-tab" data-start="401" data-end="600">
+                                        <strong>401–600</strong>
+                                        <span>Cartela 3</span>
+                                    </button>
+
+                                    <button class="range-tab" data-start="601" data-end="800">
+                                        <strong>601–800</strong>
+                                        <span>Cartela 4</span>
+                                    </button>
+
+                                    <button class="range-tab" data-start="801" data-end="1000">
+                                        <strong>801–1000</strong>
+                                        <span>Cartela 5</span>
+                                    </button>
                                 </div>
                             </div>
+
                             <!-- Quick Actions -->
-                            <div class="quick-actions">
-                                <button class="btn btn-outline" id="surprise-btn">Surpresa (1 número)</button>
+                            <div class="numbers-toolbar">
+                                <button class="btn btn-outline" id="surprise-btn">Selecionar número aleatório</button>
                                 <button class="btn btn-outline" id="clear-btn">Limpar Seleção</button>
+                            </div>
+
+                            <!-- Numbers Grid -->
+                            <div class="numbers-container glass-effect" id="numbers-container-public">
+                                <div class="numbers-grid" id="numbers-grid"></div>
                             </div>
                         </div>
                         <!-- Cart Section -->

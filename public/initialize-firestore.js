@@ -320,6 +320,67 @@ class FirestoreInitializer {
         }
     }
 
+    // Resetar a rifa: volta todos os números para disponível e arquiva transações
+    async resetRaffle() {
+        const serverTimestamp = firebase.firestore.FieldValue.serverTimestamp();
+
+        // Volta todos os números para disponível (em lotes de 450)
+        const numbersSnapshot = await this.db.collection('raffleNumbers').get();
+        let batch = this.db.batch();
+        let count = 0;
+
+        for (const doc of numbersSnapshot.docs) {
+            batch.update(doc.ref, {
+                status: 'available',
+                buyerInfo: null,
+                reservedAt: null,
+                reservedUntil: null,
+                soldAt: null,
+                confirmedAt: null,
+                manualEntry: null,
+                manualReserve: null,
+                resetAt: serverTimestamp
+            });
+            count++;
+
+            if (count === 450) {
+                await batch.commit();
+                batch = this.db.batch();
+                count = 0;
+            }
+        }
+
+        if (count > 0) await batch.commit();
+
+        // Arquiva as transações existentes (em lotes de 450)
+        const transactionsSnapshot = await this.db.collection('transactions').get();
+        batch = this.db.batch();
+        count = 0;
+
+        for (const doc of transactionsSnapshot.docs) {
+            batch.update(doc.ref, {
+                status: 'archived_after_reset',
+                archivedAt: serverTimestamp
+            });
+            count++;
+
+            if (count === 450) {
+                await batch.commit();
+                batch = this.db.batch();
+                count = 0;
+            }
+        }
+
+        if (count > 0) await batch.commit();
+
+        await this.db.collection('config').doc('raffle').set({
+            lastResetAt: serverTimestamp
+        }, { merge: true });
+
+        console.log('Rifa resetada: números disponíveis e transações arquivadas');
+        return true;
+    }
+
     // Função para obter estatísticas
     async getStats() {
         try {

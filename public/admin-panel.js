@@ -212,6 +212,32 @@ class AdminPanel {
         document.getElementById('search-input')?.addEventListener('input', (e) => {
             this.searchNumbers(e.target.value);
         });
+
+        // Máscara de telefone nos formulários manuais
+        this.setupPhoneMask(document.getElementById('sale-phone'));
+        this.setupPhoneMask(document.getElementById('reserve-phone'));
+    }
+
+    // Formata o telefone como (DD) NNNNN-NNNN e bloqueia letras
+    setupPhoneMask(input) {
+        if (!input) return;
+
+        input.addEventListener('input', () => {
+            let value = input.value.replace(/\D/g, '').slice(0, 11);
+
+            if (value.length <= 10) {
+                value = value.replace(/^(\d{2})(\d{4})(\d{0,4}).*/, '($1) $2-$3');
+            } else {
+                value = value.replace(/^(\d{2})(\d{5})(\d{0,4}).*/, '($1) $2-$3');
+            }
+
+            input.value = value.trim();
+        });
+    }
+
+    isValidPhone(phone) {
+        const digits = phone.replace(/\D/g, '');
+        return digits.length === 10 || digits.length === 11;
     }
 
     async sellNumber(number) {
@@ -291,7 +317,12 @@ class AdminPanel {
             this.showMessage('Número e nome são obrigatórios', 'error');
             return;
         }
-        
+
+        if (phone && !this.isValidPhone(phone)) {
+            this.showMessage('Telefone inválido. Use DDD + número.', 'error');
+            return;
+        }
+
         try {
             await window.firestoreInitializer.addManualSale(parseInt(number), name, phone, email);
             this.showMessage(`Número ${number} vendido para ${name}`, 'success');
@@ -313,9 +344,19 @@ class AdminPanel {
             this.showMessage('Número e nome são obrigatórios', 'error');
             return;
         }
-        
+
+        if (phone && !this.isValidPhone(phone)) {
+            this.showMessage('Telefone inválido. Use DDD + número.', 'error');
+            return;
+        }
+
         try {
-            await this.reserveNumber(parseInt(number));
+            await window.firestoreInitializer.reserveNumberManually(
+                parseInt(number),
+                name,
+                phone,
+                reason
+            );
             this.showMessage(`Número ${number} reservado para ${name}`, 'success');
             
             // Limpar formulário
@@ -433,6 +474,35 @@ class AdminPanel {
         }, 3000);
     }
 
+    // Resetar a rifa (zerar todos os números) com dupla confirmação + senha
+    async confirmResetRaffle() {
+        const phrase = prompt('Digite RESETAR para confirmar que deseja zerar a rifa:');
+
+        if (phrase !== 'RESETAR') {
+            this.showMessage('Reset cancelado', 'error');
+            return;
+        }
+
+        const password = prompt('Digite a senha de confirmação:');
+
+        if (password !== 'jambu-reset-2026') {
+            this.showMessage('Senha incorreta', 'error');
+            return;
+        }
+
+        if (!confirm('Tem certeza? Todos os números voltarão para disponíveis.')) return;
+
+        try {
+            await window.firestoreInitializer.resetRaffle();
+            this.showMessage('Rifa resetada com sucesso!', 'success');
+            await this.loadNumbers();
+            await this.loadTransactions();
+        } catch (error) {
+            console.error(error);
+            this.showMessage(`Erro ao resetar rifa: ${error.message}`, 'error');
+        }
+    }
+
     // Exportar dados
     async exportData() {
         try {
@@ -487,8 +557,4 @@ class AdminPanel {
     }
 }
 
-// Inicializar painel admin
-let adminPanel;
-document.addEventListener('DOMContentLoaded', () => {
-    adminPanel = new AdminPanel();
-});
+window.AdminPanel = AdminPanel;

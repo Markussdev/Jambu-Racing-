@@ -452,15 +452,54 @@ class SorteioManager {
 // Inicializar quando a página carregar
 let sorteioManager;
 
+async function isSorteioAdmin(user) {
+    if (!user || !user.email) return false;
+
+    const adminConfigDoc = await firebase.firestore().collection('config').doc('admins').get();
+    if (!adminConfigDoc.exists) return false;
+
+    const adminEmails = adminConfigDoc.data().emails || [];
+    return adminEmails.includes(user.email.toLowerCase());
+}
+
+function showSorteioAccessDenied() {
+    document.body.innerHTML = `
+        <div class="bg-raffle">
+            <div class="overlay">
+                <div class="container" style="min-height: 100vh; display: flex; align-items: center; justify-content: center;">
+                    <div class="glass-effect" style="max-width: 420px; padding: 2rem; text-align: center;">
+                        <h1 class="title" style="font-size: 1.75rem; margin-bottom: 1rem;">Acesso administrativo</h1>
+                        <p style="color: #d1d5db; margin-bottom: 1.5rem;">Entre no painel admin para realizar o sorteio.</p>
+                        <a href="admin.html" class="btn-back">Ir para o Admin</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('DOM carregado, inicializando SorteioManager...');
-    sorteioManager = new SorteioManager();
+    firebase.auth().onAuthStateChanged(async (user) => {
+        try {
+            if (!(await isSorteioAdmin(user))) {
+                if (user) await firebase.auth().signOut();
+                showSorteioAccessDenied();
+                return;
+            }
+
+            console.log('Admin autenticado, inicializando SorteioManager...');
+            sorteioManager = new SorteioManager();
+        } catch (error) {
+            console.error('Erro ao verificar acesso ao sorteio:', error);
+            showSorteioAccessDenied();
+        }
+    });
 });
 
 // Fechar modal clicando fora
 document.addEventListener('click', (e) => {
     if (e.target.id === 'resultado-modal') {
-        sorteioManager.fecharModal();
+        sorteioManager?.fecharModal();
     }
 });
 

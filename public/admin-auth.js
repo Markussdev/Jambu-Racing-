@@ -5,7 +5,6 @@ class AdminAuth {
         this.auth = firebase.auth();
         this.isAuthenticated = false;
         this.currentUser = null;
-        this.ADMIN_PASSWORD = 'INSERIR_SENHA_ADMIN_AQUI'; // Trocar antes de publicar
         this.originalContent = null; // Armazenar o conteúdo original
         this.init();
     }
@@ -42,17 +41,26 @@ class AdminAuth {
     async ensureAdminConfig() {
         try {
             const adminConfigDoc = await this.db.collection('config').doc('admins').get();
+            const defaultAdminEmail = 'equipebajanazare@gmail.com';
             
             if (!adminConfigDoc.exists) {
                 // Criar configuração inicial com emails de administradores
                 await this.db.collection('config').doc('admins').set({
                     emails: [
-                        'INSERIR_EMAIL_ADMIN_AQUI'
+                        defaultAdminEmail
                     ],
                     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                     lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
                 });
                 console.log('Configuração de administradores criada');
+            } else {
+                const currentEmails = adminConfigDoc.data().emails || [];
+                if (!currentEmails.includes(defaultAdminEmail)) {
+                    await adminConfigDoc.ref.update({
+                        emails: firebase.firestore.FieldValue.arrayUnion(defaultAdminEmail),
+                        lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                }
             }
         } catch (error) {
             console.error('Erro ao configurar administradores:', error);
@@ -326,22 +334,7 @@ class AdminAuth {
                 throw new Error('Email não autorizado para acesso administrativo');
             }
             
-            // Verificar se a senha está correta
-            if (password !== this.ADMIN_PASSWORD) {
-                throw new Error('Senha incorreta');
-            }
-            
-            // Tentar fazer login no Firebase (criar usuário se não existir)
-            try {
-                await this.auth.signInWithEmailAndPassword(email, password);
-            } catch (signInError) {
-                if (signInError.code === 'auth/user-not-found') {
-                    // Usuário não existe, criar conta
-                    await this.auth.createUserWithEmailAndPassword(email, password);
-                } else {
-                    throw signInError;
-                }
-            }
+            await this.auth.signInWithEmailAndPassword(email, password);
             
             this.showLoginMessage('Login realizado com sucesso! Redirecionando...', 'success');
             
@@ -357,12 +350,15 @@ class AdminAuth {
             
             if (error.message === 'Email não autorizado para acesso administrativo') {
                 errorMessage = 'Este email não tem permissão para acessar o painel administrativo';
-            } else if (error.message === 'Senha incorreta') {
-                errorMessage = 'Senha incorreta. Use a senha padrão';
             } else {
                 switch (error.code) {
                     case 'auth/invalid-email':
                         errorMessage = 'Email inválido';
+                        break;
+                    case 'auth/user-not-found':
+                    case 'auth/wrong-password':
+                    case 'auth/invalid-login-credentials':
+                        errorMessage = 'Email ou senha incorretos';
                         break;
                     case 'auth/too-many-requests':
                         errorMessage = 'Muitas tentativas. Tente novamente mais tarde';
@@ -465,6 +461,11 @@ class AdminAuth {
                 adminContent.classList.add('authenticated');
                 adminContent.style.display = 'block';
             }
+
+            const sorteioLink = document.getElementById('sorteioLink');
+            if (sorteioLink) {
+                sorteioLink.style.display = 'flex';
+            }
             
             // Inicializar o painel admin se necessário
             this.initializeAdminPanel();
@@ -478,17 +479,11 @@ class AdminAuth {
     async initializeAdminPanel() {
         try {
             // Aguardar um pouco para garantir que o DOM foi restaurado
-            setTimeout(async () => {
-                if (!window.adminPanel && typeof AdminPanel !== 'undefined') {
-                    window.adminPanel = new AdminPanel();
+            setTimeout(() => {
+                if (!window.adminPanel && window.AdminPanel) {
+                    window.adminPanel = new window.AdminPanel();
                 } else if (!window.adminPanel) {
-                    // Tentar importar o AdminPanel se não estiver disponível
-                    try {
-                        const { default: AdminPanel } = await import('./admin-panel.js');
-                        window.adminPanel = new AdminPanel();
-                    } catch (error) {
-                        console.error('Erro ao carregar AdminPanel:', error);
-                    }
+                    console.error('AdminPanel ainda nao esta disponivel.');
                 }
             }, 500);
         } catch (error) {
@@ -501,6 +496,7 @@ class AdminAuth {
             await this.auth.signOut();
             this.isAuthenticated = false;
             this.currentUser = null;
+            window.adminPanel = null;
             this.showLoginForm();
         } catch (error) {
             console.error('Erro ao fazer logout:', error);

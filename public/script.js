@@ -37,14 +37,88 @@ class FirebaseManager {
         }
     }
 
+    // Converter diferentes formatos de data (Timestamp, {seconds}, Date) para Date
+    toDate(value) {
+        if (!value) return null;
+        if (value.toDate) return value.toDate();
+        if (value.seconds) return new Date(value.seconds * 1000);
+        return new Date(value);
+    }
+
+    // Verificar se uma reserva online expirou (reservas manuais nunca expiram)
+    isExpiredReservation(data) {
+        if (!data || data.status !== 'reserved') return false;
+        if (data.manualReserve) return false;
+        if (!data.reservedUntil) return false;
+
+        const reservedUntil = this.toDate(data.reservedUntil);
+        return reservedUntil && reservedUntil.getTime() <= Date.now();
+    }
+
+    // Liberar uma reserva expirada (volta para disponível)
+    async releaseExpiredReservation(numberRef) {
+        await numberRef.update({
+            status: 'available',
+            buyerInfo: null,
+            reservedAt: null,
+            reservedUntil: null,
+            releasedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            releaseReason: 'Reserva expirada automaticamente'
+        });
+    }
+
+    // Varrer e liberar todas as reservas expiradas
+    async cleanupExpiredReservations() {
+        try {
+            const snapshot = await this.db
+                .collection('raffleNumbers')
+                .where('status', '==', 'reserved')
+                .get();
+
+            const batch = this.db.batch();
+            let count = 0;
+
+            snapshot.forEach(doc => {
+                if (this.isExpiredReservation(doc.data())) {
+                    batch.update(doc.ref, {
+                        status: 'available',
+                        buyerInfo: null,
+                        reservedAt: null,
+                        reservedUntil: null,
+                        releasedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        releaseReason: 'Reserva expirada automaticamente'
+                    });
+                    count++;
+                }
+            });
+
+            if (count > 0) {
+                await batch.commit();
+                console.log(`${count} reservas expiradas liberadas`);
+            }
+        } catch (error) {
+            console.error('Erro ao limpar reservas expiradas:', error);
+        }
+    }
+
     // Verificar se número está disponível
     async checkNumberAvailability(number) {
         try {
-            const doc = await this.db.collection('raffleNumbers').doc(number.toString()).get();
+            const numberRef = this.db.collection('raffleNumbers').doc(number.toString());
+            const doc = await numberRef.get();
             if (!doc.exists) return true; // Se não existe, está disponível
-            
+
             const data = doc.data();
-            return data.status === 'available';
+
+            if (data.status === 'available') return true;
+
+            // Se for uma reserva expirada, libera e considera disponível
+            if (this.isExpiredReservation(data)) {
+                await this.releaseExpiredReservation(numberRef);
+                return true;
+            }
+
+            return false;
         } catch (error) {
             console.error('Erro ao verificar número:', error);
             return false;
@@ -106,34 +180,6 @@ class FirebaseManager {
             return transactionRef.id;
         } catch (error) {
             console.error('Erro ao criar transação:', error);
-            throw error;
-        }
-    }
-
-    // Upload de comprovante
-    async uploadPaymentProof(file, transactionId) {
-        try {
-            const filePath = `payment-proofs/${transactionId}/${file.name}`;
-            const storageRef = this.storage.ref(filePath);
-            const snapshot = await storageRef.put(file);
-            const downloadURL = await snapshot.ref.getDownloadURL();
-            return downloadURL;
-        } catch (error) {
-            console.error('Erro ao fazer upload do comprovante:', error);
-            throw error;
-        }
-    }
-
-    // Atualizar transação com comprovante
-    async updateTransactionWithProof(transactionId, proofURL, buyerInfo) {
-        try {
-            await this.db.collection('transactions').doc(transactionId).update({
-                paymentProof: proofURL,
-                buyerInfo: buyerInfo,
-                proofSubmittedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-        } catch (error) {
-            console.error('Erro ao atualizar transação:', error);
             throw error;
         }
     }
@@ -203,7 +249,12 @@ class RaffleManager {
         this.pricePerNumber = JAMBU_SITE_CONFIG.pricePerNumber;
         this.currentOrder = null;
         this.confirmationData = null;
-        
+
+        // Cartelas: mostra só uma faixa de números por vez
+        this.rangeSize = 200;
+        this.activeRangeStart = 1;
+        this.activeRangeEnd = 200;
+
         this.init();
     }
 
@@ -213,16 +264,24 @@ class RaffleManager {
             
             // Inicializar Firebase primeiro
             this.firebase = new FirebaseManager();
-            
+
             // Gerar grade visual imediatamente
             this.generateNumbersGrid();
             this.initializeEventListeners();
-            
+
+            // Liberar reservas expiradas antes de carregar
+            await this.firebase.cleanupExpiredReservations();
+
             // Depois carregar dados do Firebase
             await this.loadNumbersFromFirebase();
-            
+
             // Configurar listener em tempo real
             this.setupRealTimeListener();
+
+            // Verificar reservas expiradas periodicamente (a cada 60s)
+            setInterval(() => {
+                this.firebase?.cleanupExpiredReservations();
+            }, 60 * 1000);
             
             this.updateDisplay();
             console.log('RaffleManager inicializado com sucesso');
@@ -317,11 +376,29 @@ class RaffleManager {
         
         this.firebase.listenToNumbersUpdates((numbers) => {
             console.log('Atualização em tempo real recebida');
+            const removedFromSelection = [];
+
             Object.keys(numbers).forEach(numberStr => {
                 const number = parseInt(numberStr);
-                this.numbers.set(number, numbers[numberStr]);
+                const data = numbers[numberStr];
+                this.numbers.set(number, data);
+
+                // Se o número saiu de disponível (ex.: admin confirmou/reservou),
+                // remove-o da seleção do usuário
+                if (this.selectedNumbers.has(number) && data.status !== 'available' && data.status !== 'selected') {
+                    this.selectedNumbers.delete(number);
+                    removedFromSelection.push(number);
+                }
             });
+
             this.updateDisplay();
+
+            if (removedFromSelection.length > 0) {
+                this.showToast(
+                    `Número(s) ${removedFromSelection.join(', ')} foram atualizados e removidos da sua seleção.`,
+                    'error'
+                );
+            }
         });
     }
 
@@ -330,11 +407,28 @@ class RaffleManager {
         document.getElementById('surprise-btn').addEventListener('click', () => {
             this.selectRandomNumbers(1);
         });
-        
+
         document.getElementById('clear-btn').addEventListener('click', () => {
             this.clearSelection();
         });
-        
+
+        // Navegação por cartelas (faixas de números)
+        document.querySelectorAll('.range-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.range-tab').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+
+                tab.classList.add('active');
+
+                this.activeRangeStart = parseInt(tab.dataset.start);
+                this.activeRangeEnd = parseInt(tab.dataset.end);
+
+                this.generateNumbersGrid();
+                this.updateDisplay();
+            });
+        });
+
         // Modal close
         document.getElementById('modal-close').addEventListener('click', () => {
             this.closePaymentModal();
@@ -354,17 +448,34 @@ class RaffleManager {
             console.error('Elemento numbers-grid não encontrado!');
             return;
         }
-        
+
         grid.innerHTML = '';
-        
-        for (let i = 1; i <= this.totalNumbers; i++) {
+
+        // Gera apenas a faixa (cartela) ativa
+        for (let i = this.activeRangeStart; i <= this.activeRangeEnd; i++) {
             const button = document.createElement('button');
             button.className = 'number-btn available';
-            button.textContent = i;
+            button.textContent = i.toString().padStart(3, '0');
+            button.dataset.number = i;
             button.addEventListener('click', () => this.toggleNumber(i));
             grid.appendChild(button);
         }
-        console.log(`Grade de numeros gerada com ${this.totalNumbers} numeros`);
+        console.log(`Grade gerada: ${this.activeRangeStart} até ${this.activeRangeEnd}`);
+    }
+
+    // Muda para a cartela que contém o número informado (e marca a aba)
+    goToRangeOfNumber(number) {
+        document.querySelectorAll('.range-tab').forEach(tab => {
+            const start = parseInt(tab.dataset.start);
+            const end = parseInt(tab.dataset.end);
+            const isTarget = number >= start && number <= end;
+            tab.classList.toggle('active', isTarget);
+            if (isTarget) {
+                this.activeRangeStart = start;
+                this.activeRangeEnd = end;
+            }
+        });
+        this.generateNumbersGrid();
     }
 
     toggleNumber(number) {
@@ -420,7 +531,10 @@ class RaffleManager {
                 this.numbers.get(number).status = 'selected';
             }
         });
-        
+
+        // Pula para a cartela do número sorteado para o usuário vê-lo
+        this.goToRangeOfNumber(randomNumbers[0]);
+
         this.updateDisplay();
         this.showToast(`${count} números selecionados aleatoriamente!`, 'success');
     }
@@ -475,8 +589,8 @@ class RaffleManager {
         const buttons = document.querySelectorAll('.number-btn');
         
         buttons.forEach(button => {
-            const number = parseInt(button.textContent);
-            
+            const number = parseInt(button.dataset.number);
+
             // Reset classes
             button.className = 'number-btn';
             
@@ -616,6 +730,7 @@ class RaffleManager {
             </div>
 
             <form id="payment-form" class="payment-form">
+              <div class="form-columns">
                 <div class="form-section glass-effect">
                     <h3 style="font-weight: 600; margin-bottom: 12px;">Seus Dados</h3>
                     
@@ -637,7 +752,7 @@ class RaffleManager {
                         </div>
                         <div class="form-group">
                             <label for="phone">Telefone *</label>
-                            <input type="tel" id="phone" required>
+                            <input type="tel" id="phone" required inputmode="numeric" maxlength="15" placeholder="(91) 99999-9999" autocomplete="tel">
                         </div>
                     </div>
                 </div>
@@ -672,46 +787,7 @@ class RaffleManager {
                         </div>
                     </div>
                 </div>
-
-                <div class="form-section glass-effect">
-                    <h3 style="font-weight: 600; margin-bottom: 12px;">Envio do Comprovante</h3>
-                    
-                    <div class="proof-options">
-                        <label class="option-item">
-                            <input type="radio" name="proofMethod" value="whatsapp" checked>
-                            <span>Enviar comprovante via WhatsApp</span>
-                        </label>
-                        <label class="option-item">
-                            <input type="radio" name="proofMethod" value="upload">
-                            <span>Anexar comprovante no site</span>
-                        </label>
-                    </div>
-
-                    <div id="upload-section" style="display: none; margin-top: 12px;">
-                        <label for="proofFile" class="file-label">
-                            <span>📎 Anexar comprovante (imagem ou PDF)</span>
-                            <input type="file" id="proofFile" accept="image/*,.pdf" style="display: none;">
-                        </label>
-                        <div id="file-name" style="font-size: 0.875rem; color: #9ca3af; margin-top: 4px;"></div>
-                    </div>
-
-                    <div id="whatsapp-section" style="margin-top: 12px;">
-                        <p style="font-size: 0.875rem; color: #d1d5db;">
-                            📱 Envie o comprovante para: <strong>${JAMBU_SITE_CONFIG.whatsappDisplay}</strong>
-                        </p>
-                        <div class="whatsapp-message glass-effect" style="margin-top: 8px; padding: 12px;">
-                            <p style="font-size: 0.875rem; margin-bottom: 8px;">
-                                <strong>Enviar mensagem diretamente:</strong>
-                            </p>
-                            <p style="font-size: 0.75rem; color: #9ca3af;" id="suggested-message">
-                                Olá! Realizei o pagamento da ${JAMBU_SITE_CONFIG.raffleName}. Números: ${selectedArray.join(', ')}. Valor: ${this.formatCurrency(totalValue)}
-                            </p>
-                            <button type="button" class="btn btn-success" onclick="raffleManager.openWhatsApp()" style="margin-top: 8px; width: 100%;">
-                                📱 Abrir WhatsApp
-                            </button>
-                        </div>
-                    </div>
-                </div>
+              </div>
 
                 <div class="form-actions">
                     <button type="submit" class="btn btn-success btn-full">
@@ -723,9 +799,9 @@ class RaffleManager {
                 </div>
 
                 <div class="payment-info">
-                    <p>• O número será reservado por 24h após o envio do comprovante</p>
+                    <p>• Os números serão reservados por 24h após finalizar o pedido</p>
+                    <p>• O comprovante será enviado na próxima tela</p>
                     <p>• Após a verificação manual, você receberá a confirmação</p>
-                    <p>• Em caso de problemas, entre em contato conosco</p>
                 </div>
             </form>
         `;
@@ -734,70 +810,38 @@ class RaffleManager {
         modal.classList.add('active');
     }
 
-    // Abrir WhatsApp com mensagem pré-preenchida
-    openWhatsApp() {
-        const firstName = document.getElementById('firstName')?.value || '';
-        const lastName = document.getElementById('lastName')?.value || '';
-        const selectedArray = Array.from(this.selectedNumbers).sort((a, b) => a - b);
-        const totalValue = selectedArray.length * this.pricePerNumber;
-        
-        let message = `Olá! Realizei o pagamento da ${JAMBU_SITE_CONFIG.raffleName}.\n\n`;
-        
-        if (firstName || lastName) {
-            message += `*Nome:* ${firstName} ${lastName}\n`;
-        }
-        
-        message += `*Números:* ${selectedArray.join(', ')}\n`;
-        message += `*Valor:* ${this.formatCurrency(totalValue)}\n\n`;
-        message += `Anexo: comprovante de pagamento`;
-        
-        // Codificar a mensagem para URL
-        const encodedMessage = encodeURIComponent(message);
-        
-        // Número no formato internacional (sem espaços, parênteses, etc.)
-        const phoneNumber = JAMBU_SITE_CONFIG.whatsappNumber;
-        
-        // Criar URL do WhatsApp
-        const whatsappURL = `https://wa.me/${phoneNumber}?text=${encodedMessage}`;
-        
-        // Abrir em nova janela
-        window.open(whatsappURL, '_blank');
-        
-        this.showToast('Abrindo WhatsApp...', 'success');
-    }
-
     setupFormEvents() {
         const form = document.getElementById('payment-form');
-        const proofMethodRadios = document.querySelectorAll('input[name="proofMethod"]');
-        const uploadSection = document.getElementById('upload-section');
-        const whatsappSection = document.getElementById('whatsapp-section');
-        const fileInput = document.getElementById('proofFile');
-        const fileName = document.getElementById('file-name');
-
-        proofMethodRadios.forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                if (e.target.value === 'upload') {
-                    uploadSection.style.display = 'block';
-                    whatsappSection.style.display = 'none';
-                } else {
-                    uploadSection.style.display = 'none';
-                    whatsappSection.style.display = 'block';
-                }
-            });
-        });
-
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                fileName.textContent = `Arquivo selecionado: ${e.target.files[0].name}`;
-            } else {
-                fileName.textContent = '';
-            }
-        });
 
         form.addEventListener('submit', (e) => {
             e.preventDefault();
             this.submitPayment();
         });
+
+        // Máscara do telefone
+        this.setupPhoneMask(document.getElementById('phone'));
+    }
+
+    // Formata o telefone como (DD) NNNNN-NNNN e bloqueia letras
+    setupPhoneMask(input) {
+        if (!input) return;
+
+        input.addEventListener('input', () => {
+            let value = input.value.replace(/\D/g, '').slice(0, 11);
+
+            if (value.length <= 10) {
+                value = value.replace(/^(\d{2})(\d{4})(\d{0,4}).*/, '($1) $2-$3');
+            } else {
+                value = value.replace(/^(\d{2})(\d{5})(\d{0,4}).*/, '($1) $2-$3');
+            }
+
+            input.value = value.trim();
+        });
+    }
+
+    isValidPhone(phone) {
+        const digits = phone.replace(/\D/g, '');
+        return digits.length === 10 || digits.length === 11;
     }
 
     async submitPayment() {
@@ -808,7 +852,7 @@ class RaffleManager {
             phone: document.getElementById('phone').value
         };
 
-        const proofMethod = document.querySelector('input[name="proofMethod"]:checked').value;
+        const proofMethod = 'whatsapp';
         const selectedNumbers = Array.from(this.selectedNumbers);
         const totalValue = selectedNumbers.length * this.pricePerNumber;
 
@@ -817,8 +861,8 @@ class RaffleManager {
             return;
         }
 
-        if (proofMethod === 'upload' && !document.getElementById('proofFile').files[0]) {
-            this.showToast('Anexe o comprovante de pagamento', 'error');
+        if (!this.isValidPhone(buyerInfo.phone)) {
+            this.showToast('Digite um telefone válido com DDD.', 'error');
             return;
         }
 
@@ -862,25 +906,19 @@ class RaffleManager {
                 }
             }
 
-            // CRIAR TRANSAÇÃO
+            // CRIAR TRANSAÇÃO (comprovante será enviado na tela final)
             const transactionData = {
                 numbers: selectedNumbers,
                 buyerInfo: buyerInfo,
                 totalValue: totalValue,
                 proofMethod: proofMethod,
+                proofStatus: 'waiting_proof',
                 status: 'pending'
             };
 
             const transactionId = await this.firebase.createTransaction(transactionData);
 
-            // UPLOAD DE COMPROVANTE (se aplicável)
-            if (proofMethod === 'upload') {
-                const file = document.getElementById('proofFile').files[0];
-                const proofURL = await this.firebase.uploadPaymentProof(file, transactionId);
-                await this.firebase.updateTransactionWithProof(transactionId, proofURL, buyerInfo);
-            }
-
-            // MOSTRAR CONFIRMAÇÃO
+            // MOSTRAR CONFIRMAÇÃO (com upload do comprovante)
             this.showPaymentConfirmation(transactionId, buyerInfo, selectedNumbers, proofMethod);
 
             // LIMPAR SELEÇÃO
@@ -888,12 +926,12 @@ class RaffleManager {
             this.updateDisplay();
 
         } catch (error) {
-            
-            
+            console.error('Erro ao finalizar pedido:', error);
+
             if (error.code === 'permission-denied') {
                 this.showToast('Erro de permissão. Entre em contato com o administrador.', 'error');
             } else {
-             
+                this.showToast('Erro ao finalizar o pedido. Tente novamente.', 'error');
             }
         }
     }
@@ -901,34 +939,20 @@ class RaffleManager {
     showPaymentConfirmation(transactionId, buyerInfo, numbers, proofMethod) {
         const modalTitle = document.getElementById('modal-title');
         const modalContent = document.getElementById('modal-content');
+        const totalValue = numbers.length * this.pricePerNumber;
 
-        modalTitle.textContent = 'Pedido Confirmado!';
+        modalTitle.textContent = 'Pedido Finalizado!';
 
-        const numbersHtml = numbers.map(num => 
-            `<span class="number-badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border-color: rgba(16, 185, 129, 0.3);">${num}</span>`
+        const numbersHtml = numbers.map(num =>
+            `<span class="number-badge" style="background: rgba(250, 204, 21, 0.2); color: #facc15; border-color: rgba(250, 204, 21, 0.3);">${num}</span>`
         ).join('');
-
-        let proofInstructions = '';
-        if (proofMethod === 'whatsapp') {
-            proofInstructions = `
-                <div class="proof-instructions glass-effect">
-                    <h4 style="font-weight: 600; margin-bottom: 8px;">📱 Envie seu comprovante via WhatsApp</h4>
-                    <p style="font-size: 0.875rem; color: #d1d5db;">
-                        Envie para: <strong>${JAMBU_SITE_CONFIG.whatsappDisplay}</strong>
-                    </p>
-                    <button type="button" class="btn btn-success" onclick="raffleManager.openWhatsAppConfirmation()" style="margin-top: 8px; width: 100%;">
-                        📱 Abrir WhatsApp Agora
-                    </button>
-                </div>
-            `;
-        }
 
         modalContent.innerHTML = `
             <div class="success-content">
                 <div class="success-icon" style="font-size: 4rem; margin-bottom: 16px;">✅</div>
-                <h3 class="success-title">Pedido Recebido!</h3>
-                <p class="success-message">Seus números foram reservados por 24h</p>
-                
+                <h3 class="success-title">Pedido criado com sucesso!</h3>
+                <p class="success-message">Seus números foram reservados por 24h.</p>
+
                 <div class="order-summary glass-effect">
                     <div class="summary-row">
                         <span>Números reservados:</span>
@@ -936,7 +960,7 @@ class RaffleManager {
                     </div>
                     <div class="summary-row">
                         <span>Valor:</span>
-                        <span style="color: #10b981;">${this.formatCurrency(numbers.length * this.pricePerNumber)}</span>
+                        <span style="color: #10b981;">${this.formatCurrency(totalValue)}</span>
                     </div>
                     <div class="summary-row">
                         <span>ID do pedido:</span>
@@ -948,46 +972,56 @@ class RaffleManager {
                     </div>
                 </div>
 
-                ${proofInstructions}
+                <div class="proof-instructions glass-effect">
+                    <h4 style="font-weight: 600; margin-bottom: 8px;">📱 Enviar comprovante</h4>
+                    <p style="font-size: 0.875rem; color: #d1d5db; margin-bottom: 12px;">
+                        Agora envie o comprovante pelo WhatsApp com o ID do pedido para a equipe confirmar sua compra.
+                    </p>
+
+                    <button type="button" class="btn btn-success btn-full" onclick="raffleManager.openWhatsAppProof()">
+                        📱 Enviar comprovante via WhatsApp
+                    </button>
+                </div>
 
                 <div class="next-steps glass-effect">
                     <h4 style="font-weight: 600; margin-bottom: 8px;">Próximos passos:</h4>
                     <p style="font-size: 0.875rem; color: #d1d5db;">
-                        1. Aguarde a confirmação do pagamento<br>
-                        2. Você receberá uma mensagem de confirmação<br>
-                        3. Os números serão marcados como vendidos
+                        1. Envie o comprovante pelo WhatsApp<br>
+                        2. A equipe irá verificar o pagamento<br>
+                        3. Seus números serão marcados como vendidos
                     </p>
                 </div>
-                
+
                 <button class="btn btn-primary btn-full" onclick="raffleManager.closePaymentModal()">
                     Continuar
                 </button>
             </div>
         `;
 
-        // Guardar informações para o WhatsApp de confirmação
-        this.confirmationData = { buyerInfo, numbers, totalValue };
+        this.confirmationData = { transactionId, buyerInfo, numbers, totalValue };
     }
 
-    // WhatsApp para confirmação após pedido
-    openWhatsAppConfirmation() {
-        if (!this.confirmationData) return;
-        
-        const { buyerInfo, numbers, totalValue } = this.confirmationData;
-        
-        let message = `*CONFIRMAÇÃO DE PAGAMENTO - ${JAMBU_SITE_CONFIG.raffleName.toUpperCase()}*\n\n`;
+    // Abre o WhatsApp já preenchido para o cliente enviar o comprovante
+    openWhatsAppProof() {
+        if (!this.confirmationData) {
+            this.showToast('Dados do pedido não encontrados. Recarregue a página.', 'error');
+            return;
+        }
+
+        const { transactionId, buyerInfo, numbers, totalValue } = this.confirmationData;
+
+        let message = `*COMPROVANTE - ${JAMBU_SITE_CONFIG.raffleName.toUpperCase()}*\n\n`;
         message += `*Nome:* ${buyerInfo.firstName} ${buyerInfo.lastName}\n`;
         message += `*Telefone:* ${buyerInfo.phone}\n`;
         message += `*Números:* ${numbers.join(', ')}\n`;
         message += `*Valor:* ${this.formatCurrency(totalValue)}\n`;
-        message += `*ID do Pedido:* ${'local-' + Date.now()}\n\n`;
+        message += `*ID do Pedido:* ${transactionId}\n\n`;
         message += `Segue em anexo o comprovante de pagamento.`;
-        
-        const encodedMessage = encodeURIComponent(message);
-        const phoneNumber = JAMBU_SITE_CONFIG.whatsappNumber;
-        const whatsappURL = `https://wa.me/${phoneNumber}?text=${encodedMessage}`;
-        
+
+        const whatsappURL = `https://wa.me/${JAMBU_SITE_CONFIG.whatsappNumber}?text=${encodeURIComponent(message)}`;
         window.open(whatsappURL, '_blank');
+
+        this.showToast('Abrindo WhatsApp... anexe o comprovante na conversa.', 'success');
     }
 
     closePaymentModal() {
