@@ -625,30 +625,11 @@
         </div>
     </div>
 
-    <!-- Firebase SDKs -->
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
-    <script src="firebase-config.js"></script>
-    <script src="initialize-firestore.js"></script>
+    <!-- Supabase SDK + app scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="site-config.js"></script>
+    <script src="supabase-config.js"></script>
     <script src="admin-auth.js"></script>
-    <script>
-        // Script para controlar a exibição do conteúdo admin
-        document.addEventListener('DOMContentLoaded', () => {
-            // Aguardar autenticação antes de mostrar conteúdo
-            firebase.auth().onAuthStateChanged(async (user) => {
-                if (user && window.adminAuth && window.adminAuth.isAuthenticated) {
-                    // Usuário autenticado e autorizado - mostrar painel admin
-                    document.getElementById('admin-content').classList.add('authenticated');
-                    document.getElementById('sorteioLink').style.display = 'flex'; // Mostrar link do sorteio
-                } else {
-                    // Usuário não autenticado - esconder link do sorteio
-                    document.getElementById('sorteioLink').style.display = 'none';
-                }
-            });
-        });
-    </script>
     <script src="admin-panel.js"></script>
 </body>
 </html>

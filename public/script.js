@@ -1,236 +1,5 @@
 // JAMBU_SITE_CONFIG agora vem de site-config.js
 
-// Firebase Integration
-class FirebaseManager {
-    constructor() {
-        try {
-            this.db = firebase.firestore();
-            this.storage = firebase.storage();
-            console.log('Firebase inicializado com sucesso');
-        } catch (error) {
-            console.error('Erro ao inicializar Firebase:', error);
-        }
-    }
-
-    // Buscar todos os números da rifa
-    async getRaffleNumbers() {
-        try {
-            const snapshot = await this.db.collection('raffleNumbers').get();
-            const numbers = {};
-            snapshot.forEach(doc => {
-                numbers[doc.id] = doc.data();
-            });
-            console.log('Números carregados:', Object.keys(numbers).length);
-            return numbers;
-        } catch (error) {
-            console.error('Erro ao buscar números:', error);
-            throw error;
-        }
-    }
-
-    // Converter diferentes formatos de data (Timestamp, {seconds}, Date) para Date
-    toDate(value) {
-        if (!value) return null;
-        if (value.toDate) return value.toDate();
-        if (value.seconds) return new Date(value.seconds * 1000);
-        return new Date(value);
-    }
-
-    // Verificar se uma reserva online expirou (reservas manuais nunca expiram)
-    isExpiredReservation(data) {
-        if (!data || data.status !== 'reserved') return false;
-        if (data.manualReserve) return false;
-        if (!data.reservedUntil) return false;
-
-        const reservedUntil = this.toDate(data.reservedUntil);
-        return reservedUntil && reservedUntil.getTime() <= Date.now();
-    }
-
-    // Liberar uma reserva expirada (volta para disponível)
-    async releaseExpiredReservation(numberRef) {
-        await numberRef.update({
-            status: 'available',
-            buyerInfo: null,
-            reservedAt: null,
-            reservedUntil: null,
-            releasedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            releaseReason: 'Reserva expirada automaticamente'
-        });
-    }
-
-    // Varrer e liberar todas as reservas expiradas
-    async cleanupExpiredReservations() {
-        try {
-            const snapshot = await this.db
-                .collection('raffleNumbers')
-                .where('status', '==', 'reserved')
-                .get();
-
-            const batch = this.db.batch();
-            let count = 0;
-
-            snapshot.forEach(doc => {
-                if (this.isExpiredReservation(doc.data())) {
-                    batch.update(doc.ref, {
-                        status: 'available',
-                        buyerInfo: null,
-                        reservedAt: null,
-                        reservedUntil: null,
-                        releasedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        releaseReason: 'Reserva expirada automaticamente'
-                    });
-                    count++;
-                }
-            });
-
-            if (count > 0) {
-                await batch.commit();
-                console.log(`${count} reservas expiradas liberadas`);
-            }
-        } catch (error) {
-            console.error('Erro ao limpar reservas expiradas:', error);
-        }
-    }
-
-    // Verificar se número está disponível
-    async checkNumberAvailability(number) {
-        try {
-            const numberRef = this.db.collection('raffleNumbers').doc(number.toString());
-            const doc = await numberRef.get();
-            if (!doc.exists) return true; // Se não existe, está disponível
-
-            const data = doc.data();
-
-            if (data.status === 'available') return true;
-
-            // Se for uma reserva expirada, libera e considera disponível
-            if (this.isExpiredReservation(data)) {
-                await this.releaseExpiredReservation(numberRef);
-                return true;
-            }
-
-            return false;
-        } catch (error) {
-            console.error('Erro ao verificar número:', error);
-            return false;
-        }
-    }
-
-    // Tentar reservar número com verificação
-    async tryReserveNumber(number, buyerInfo) {
-        try {
-            const numberRef = this.db.collection('raffleNumbers').doc(number.toString());
-            
-            // Usar transação para garantir atomicidade
-            const result = await this.db.runTransaction(async (transaction) => {
-                const doc = await transaction.get(numberRef);
-                
-                if (!doc.exists) {
-                    // Criar número se não existir
-                    transaction.set(numberRef, {
-                        number: parseInt(number),
-                        status: 'reserved',
-                        buyerInfo: buyerInfo,
-                        reservedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        reservedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 horas
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    return { success: true, action: 'created' };
-                }
-                
-                const data = doc.data();
-                if (data.status === 'available') {
-                    // Reservar número disponível
-                    transaction.update(numberRef, {
-                        status: 'reserved',
-                        buyerInfo: buyerInfo,
-                        reservedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        reservedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 horas
-                    });
-                    return { success: true, action: 'reserved' };
-                } else {
-                    return { success: false, reason: `Número ${number} já está ${data.status}` };
-                }
-            });
-            
-            return result;
-        } catch (error) {
-            console.error('Erro na transação de reserva:', error);
-            return { success: false, reason: 'Erro de servidor' };
-        }
-    }
-
-    // Criar nova transação
-    async createTransaction(transactionData) {
-        try {
-            const transactionRef = await this.db.collection('transactions').add({
-                ...transactionData,
-                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                status: 'pending'
-            });
-            return transactionRef.id;
-        } catch (error) {
-            console.error('Erro ao criar transação:', error);
-            throw error;
-        }
-    }
-
-    // Escutar mudanças nos números em tempo real
-    listenToNumbersUpdates(callback) {
-        return this.db.collection('raffleNumbers').onSnapshot(snapshot => {
-            const numbers = {};
-            snapshot.forEach(doc => {
-                numbers[doc.id] = doc.data();
-            });
-            callback(numbers);
-        }, error => {
-            console.error('Erro no listener em tempo real:', error);
-        });
-    }
-
-    // Adicionar número vendido manualmente
-    async addManualSale(number, buyerName, buyerPhone = null) {
-        try {
-            const buyerInfo = {
-                firstName: buyerName.split(' ')[0],
-                lastName: buyerName.split(' ').slice(1).join(' ') || '',
-                phone: buyerPhone || 'Não informado',
-                manualEntry: true
-            };
-
-            await this.db.collection('raffleNumbers').doc(number.toString()).update({
-                status: 'sold',
-                buyerInfo: buyerInfo,
-                soldAt: firebase.firestore.FieldValue.serverTimestamp(),
-                reservedUntil: null,
-                manualEntry: true
-            });
-
-            return true;
-        } catch (error) {
-            // Se o documento não existir, criar
-            if (error.code === 'not-found') {
-                await this.db.collection('raffleNumbers').doc(number.toString()).set({
-                    number: parseInt(number),
-                    status: 'sold',
-                    buyerInfo: {
-                        firstName: buyerName.split(' ')[0],
-                        lastName: buyerName.split(' ').slice(1).join(' ') || '',
-                        phone: buyerPhone || 'Não informado',
-                        manualEntry: true
-                    },
-                    soldAt: firebase.firestore.FieldValue.serverTimestamp(),
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                    manualEntry: true
-                });
-                return true;
-            }
-            console.error('Erro ao adicionar venda manual:', error);
-            throw error;
-        }
-    }
-}
-
 // Raffle Management System
 class RaffleManager {
     constructor() {
@@ -254,14 +23,14 @@ class RaffleManager {
             console.log('Iniciando RaffleManager...');
             
             // Inicializar backend (Supabase)
-            this.firebase = new SupabaseManager();
+            this.backend = new SupabaseManager();
 
             // Gerar grade visual imediatamente
             this.generateNumbersGrid();
             this.initializeEventListeners();
 
             // Carregar dados do backend
-            await this.loadNumbersFromFirebase();
+            await this.loadNumbersFromBackend();
 
             // Configurar listener em tempo real
             this.setupRealTimeListener();
@@ -278,14 +47,15 @@ class RaffleManager {
         }
     }
 
-    async loadNumbersFromFirebase() {
+    async loadNumbersFromBackend() {
         try {
-            const numbersData = await this.firebase.getRaffleNumbers();
+            const numbersData = await this.backend.getRaffleNumbers();
             
-            // Se não houver números no Firestore, inicializar
+            // Se não houver números no Supabase, usar fallback local seguro
             if (Object.keys(numbersData).length === 0) {
-                console.log('Inicializando números no Firestore...');
-                await this.initializeFirestoreNumbers();
+                console.warn('Nenhum numero encontrado no Supabase. Verifique o seed do banco.');
+                this.initializeLocalNumbers();
+                return;
             } else {
                 // Carregar números existentes
                 console.log('Carregando números existentes...');
@@ -306,42 +76,6 @@ class RaffleManager {
         }
     }
 
-    async initializeFirestoreNumbers() {
-        try {
-            // Usar batches para escrever em lotes (máximo 500 operações por batch)
-            let batch = this.firebase.db.batch();
-            let operationCount = 0;
-            
-            for (let i = 1; i <= this.totalNumbers; i++) {
-                const numberRef = this.firebase.db.collection('raffleNumbers').doc(i.toString());
-                const numberData = {
-                    number: i,
-                    status: 'available',
-                    reservedUntil: null,
-                    buyerInfo: null,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                };
-                batch.set(numberRef, numberData);
-                this.numbers.set(i, numberData);
-
-                operationCount++;
-                if (operationCount === 500) {
-                    await batch.commit();
-                    batch = this.firebase.db.batch();
-                    operationCount = 0;
-                }
-            }
-            
-            if (operationCount > 0) {
-                await batch.commit();
-            }
-            console.log(`${this.totalNumbers} numeros inicializados no Firestore`);
-        } catch (error) {
-            console.error('Erro ao inicializar Firestore:', error);
-            this.initializeLocalNumbers();
-        }
-    }
-
     initializeLocalNumbers() {
         console.log('Inicializando números localmente...');
         for (let i = 1; i <= this.totalNumbers; i++) {
@@ -355,9 +89,9 @@ class RaffleManager {
     }
 
     setupRealTimeListener() {
-        if (!this.firebase) return;
+        if (!this.backend) return;
         
-        this.firebase.listenToNumbersUpdates((numbers) => {
+        this.backend.listenToNumbersUpdates((numbers) => {
             console.log('Atualização em tempo real recebida');
             const removedFromSelection = [];
 
@@ -462,7 +196,7 @@ class RaffleManager {
     }
 
     toggleNumber(number) {
-        // Se não temos dados do Firebase ainda, usar dados locais
+        // Se não temos dados do backend ainda, usar dados locais
         if (this.numbers.size === 0) {
             if (this.selectedNumbers.has(number)) {
                 this.selectedNumbers.delete(number);
@@ -559,7 +293,7 @@ class RaffleManager {
             document.getElementById('reserved-count').textContent = reserved;
             document.getElementById('sold-count').textContent = sold;
         } else {
-            // Valores padrão até carregar do Firebase
+            // Valores padrão até carregar do backend
             const selected = this.selectedNumbers.size;
             document.getElementById('available-count').textContent = this.totalNumbers - selected;
             document.getElementById('selected-count').textContent = selected;
@@ -606,7 +340,7 @@ class RaffleManager {
                     button.title = `Vendido para: ${numberData.buyerInfo.firstName} ${numberData.buyerInfo.lastName}`;
                 }
             } else {
-                // Se não temos dados do Firebase, usar seleção local
+                // Se não temos dados do backend, usar seleção local
                 if (this.selectedNumbers.has(number)) {
                     button.classList.add('selected');
                 } else {
@@ -862,12 +596,12 @@ class RaffleManager {
         try {
             this.showToast('Processando seu pedido...', 'success');
 
-            const transactionId = await this.firebase.reserveNumbers(selectedNumbers, buyerInfo);
+            const transactionId = await this.backend.reserveNumbers(selectedNumbers, buyerInfo);
 
             this.showPaymentConfirmation(transactionId, buyerInfo, selectedNumbers, proofMethod);
 
             this.selectedNumbers.clear();
-            await this.loadNumbersFromFirebase();
+            await this.loadNumbersFromBackend();
             this.updateDisplay();
 
         } catch (error) {
@@ -877,7 +611,7 @@ class RaffleManager {
 
             if (message.includes('não estão disponíveis') || message.includes('reservados') || message.includes('vendidos')) {
                 this.showToast('Um ou mais números já foram reservados. Escolha outros números.', 'error');
-                await this.loadNumbersFromFirebase();
+                await this.loadNumbersFromBackend();
                 this.updateDisplay();
                 return;
             }
@@ -1034,13 +768,13 @@ class RaffleManager {
 
     // Adicionar venda manual (para teste)
     async addManualSale(number, buyerName, buyerPhone = null) {
-        if (!this.firebase) {
-            this.showToast('Firebase não disponível', 'error');
+        if (!this.backend || typeof this.backend.addManualSale !== 'function') {
+            this.showToast('Venda manual não disponível no site público', 'error');
             return;
         }
 
         try {
-            await this.firebase.addManualSale(number, buyerName, buyerPhone);
+            await this.backend.addManualSale(number, buyerName, buyerPhone);
             this.showToast(`Número ${number} marcado como vendido para ${buyerName}`, 'success');
         } catch (error) {
             console.error('Erro ao adicionar venda manual:', error);

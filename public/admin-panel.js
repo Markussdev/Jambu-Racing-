@@ -1,74 +1,163 @@
-// Painel de Administração para Rifa
+// Painel de Administração para Rifa - Supabase
 class AdminPanel {
     constructor() {
-        this.db = firebase.firestore();
-        this.storage = firebase.storage();
-        this.pricePerNumber = 3;
+        this.client = supabaseClient;
+        this.pricePerNumber = JAMBU_SITE_CONFIG.pricePerNumber || 3;
         this.currentFilter = 'all';
+        this.searchQuery = '';
+        this.numbers = [];
         this.transactions = [];
+        this.channel = null;
+        this.reloadTimer = null;
+
         this.init();
     }
 
     async init() {
-        await this.loadNumbers();
-        await this.loadTransactions();
-        this.setupEventListeners();
-        this.setupRealTimeListener();
-    }
-
-    async loadNumbers() {
         try {
-            const snapshot = await this.db.collection('raffleNumbers').orderBy('number').get();
-            const numbers = [];
-            
-            snapshot.forEach(doc => {
-                numbers.push({ id: doc.id, ...doc.data() });
-            });
-            
-            this.displayNumbers(numbers);
-            this.updateStats(numbers);
+            await this.loadAll();
+            this.setupEventListeners();
+            this.setupRealTimeListener();
         } catch (error) {
-            console.error('Erro ao carregar números:', error);
+            console.error('Erro ao iniciar painel admin:', error);
+            this.showMessage('Erro ao carregar painel administrativo', 'error');
         }
     }
 
-    async loadTransactions() {
+    async loadAll() {
+        await Promise.all([
+            this.loadNumbers(false),
+            this.loadTransactions(false)
+        ]);
+
+        this.displayNumbers(this.numbers);
+        this.updateStats(this.numbers);
+    }
+
+    async loadNumbers(shouldRender = true) {
         try {
-            const snapshot = await this.db.collection('transactions').orderBy('createdAt', 'desc').get();
-            this.transactions = [];
-            
-            snapshot.forEach(doc => {
-                this.transactions.push({ id: doc.id, ...doc.data() });
-            });
-            
+            const { data, error } = await this.client
+                .from('raffle_numbers')
+                .select(`
+                    number,
+                    status,
+                    reserved_at,
+                    reserved_until,
+                    sold_at,
+                    confirmed_at,
+                    current_transaction_id,
+                    manual_entry,
+                    manual_reserve,
+                    release_reason,
+                    created_at,
+                    updated_at
+                `)
+                .order('number', { ascending: true });
+
+            if (error) throw error;
+
+            this.numbers = data || [];
+
+            if (shouldRender) {
+                this.displayNumbers(this.numbers);
+                this.updateStats(this.numbers);
+            }
+
+            return this.numbers;
+        } catch (error) {
+            console.error('Erro ao carregar números:', error);
+            this.showMessage(`Erro ao carregar números: ${error.message}`, 'error');
+            return [];
+        }
+    }
+
+    async loadTransactions(shouldRender = true) {
+        try {
+            const { data, error } = await this.client
+                .from('transactions')
+                .select(`
+                    id,
+                    numbers,
+                    buyer_name,
+                    buyer_phone,
+                    buyer_email,
+                    total_value,
+                    status,
+                    proof_method,
+                    proof_status,
+                    reserved_until,
+                    confirmed_at,
+                    cancelled_at,
+                    expired_at,
+                    archived_at,
+                    manual_entry,
+                    manual_reserve,
+                    notes,
+                    created_at,
+                    updated_at
+                `)
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+
+            this.transactions = data || [];
             console.log('Transações carregadas:', this.transactions.length);
-            console.log('Transações com comprovante:', this.transactions.filter(t => t.paymentProof).length);
+
+            if (shouldRender) {
+                this.displayNumbers(this.numbers);
+            }
+
+            return this.transactions;
         } catch (error) {
             console.error('Erro ao carregar transações:', error);
+            this.showMessage(`Erro ao carregar transações: ${error.message}`, 'error');
+            return [];
         }
     }
 
     setupRealTimeListener() {
-        // Listener para números
-        this.db.collection('raffleNumbers').orderBy('number').onSnapshot(snapshot => {
-            const numbers = [];
-            snapshot.forEach(doc => {
-                numbers.push({ id: doc.id, ...doc.data() });
-            });
-            this.displayNumbers(numbers);
-            this.updateStats(numbers);
-        });
+        if (this.channel) {
+            this.client.removeChannel(this.channel);
+            this.channel = null;
+        }
 
-        // Listener para transações
-        this.db.collection('transactions').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-            this.transactions = [];
-            snapshot.forEach(doc => {
-                this.transactions.push({ id: doc.id, ...doc.data() });
+        this.channel = this.client
+            .channel('admin-raffle-realtime')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'raffle_numbers' },
+                () => this.scheduleReload()
+            )
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'transactions' },
+                () => this.scheduleReload()
+            )
+            .subscribe((status) => {
+                console.log('Admin realtime:', status);
             });
-            console.log('Transações atualizadas em tempo real:', this.transactions.length);
-            // Recarregar display quando transações mudarem
-            this.loadNumbers();
-        });
+    }
+
+    scheduleReload() {
+        clearTimeout(this.reloadTimer);
+
+        this.reloadTimer = setTimeout(async () => {
+            await this.loadAll();
+        }, 500);
+    }
+
+    getTransactionForNumber(numberData) {
+        if (!numberData) return null;
+
+        if (numberData.current_transaction_id) {
+            return this.transactions.find(t => t.id === numberData.current_transaction_id) || null;
+        }
+
+        return this.transactions.find(t =>
+            Array.isArray(t.numbers) &&
+            t.numbers.includes(numberData.number) &&
+            t.status !== 'archived_after_reset'
+        ) || null;
     }
 
     displayNumbers(numbers) {
@@ -76,81 +165,94 @@ class AdminPanel {
         if (!container) return;
 
         const filteredNumbers = this.filterNumbers(numbers);
-        
-        container.innerHTML = filteredNumbers.map(number => {
-            // Buscar transação relacionada para obter comprovante
-            const transaction = this.transactions.find(t => 
-                t.numbers && Array.isArray(t.numbers) && t.numbers.includes(number.number)
-            );
 
-            console.log(`Número ${number.number}:`, {
-                hasTransaction: !!transaction,
-                hasProof: transaction ? !!transaction.paymentProof : false,
-                proofURL: transaction ? transaction.paymentProof : null
-            });
+        container.innerHTML = filteredNumbers.map(number => {
+            const transaction = this.getTransactionForNumber(number);
+            const buyerName = transaction?.buyer_name || '';
+            const buyerPhone = transaction?.buyer_phone || '';
+            const buyerEmail = transaction?.buyer_email || '';
+            const isManual = number.manual_entry || transaction?.manual_entry;
+            const isManualReserve = number.manual_reserve || transaction?.manual_reserve;
 
             return `
-            <div class="admin-number-card ${number.status}" data-number="${number.number}">
-                <div class="number-header">
-                    <span class="number-value">${number.number}</span>
-                    <span class="status-badge ${number.status}">${this.getStatusLabel(number.status)}</span>
-                </div>
-                
-                ${number.buyerInfo ? `
-                    <div class="buyer-info">
-                        <strong>${number.buyerInfo.firstName} ${number.buyerInfo.lastName}</strong>
-                        <div>📱 ${number.buyerInfo.phone}</div>
-                        ${number.buyerInfo.email && number.buyerInfo.email !== 'Não informado' ? `<div>📧 ${number.buyerInfo.email}</div>` : ''}
-                        ${number.buyerInfo.manualEntry ? '<div class="manual-entry-badge"> Venda Manual</div>' : ''}
-                        ${number.manualReserve ? '<div class="manual-entry-badge">Reserva Manual</div>' : ''}
+                <div class="admin-number-card ${number.status}" data-number="${number.number}">
+                    <div class="number-header">
+                        <span class="number-value">${number.number.toString().padStart(3, '0')}</span>
+                        <span class="status-badge ${number.status}">${this.getStatusLabel(number.status)}</span>
                     </div>
-                ` : ''}
 
-                ${transaction && transaction.paymentProof ? `
-                    <div class="payment-proof-section">
-                        <div class="proof-header">
-                            <span>📎 Comprovante Anexado</span>
+                    ${transaction ? `
+                        <div class="buyer-info">
+                            ${buyerName ? `<strong>${this.escapeHTML(buyerName)}</strong>` : ''}
+                            ${buyerPhone ? `<div>📱 ${this.escapeHTML(buyerPhone)}</div>` : ''}
+                            ${buyerEmail ? `<div>📧 ${this.escapeHTML(buyerEmail)}</div>` : ''}
+                            <div>Pedido: <span style="font-size: 0.75rem;">${transaction.id}</span></div>
+                            <div>Status pedido: ${this.getTransactionStatusLabel(transaction.status)}</div>
+                            <div>Comprovante: ${this.getProofStatusLabel(transaction.proof_status)}</div>
+                            ${isManual ? '<div class="manual-entry-badge">Venda Manual</div>' : ''}
+                            ${isManualReserve ? '<div class="manual-entry-badge">Reserva Manual</div>' : ''}
                         </div>
-                        <div class="proof-actions">
-                            <button onclick="adminPanel.viewProof('${transaction.paymentProof}')" class="btn-view-proof">
-                                 Ver Comprovante
-                            </button>
-                            <button onclick="adminPanel.downloadProof('${transaction.paymentProof}', ${number.number})" class="btn-download-proof">
-                                 Baixar
-                            </button>
+                    ` : ''}
+
+                    ${number.status === 'reserved' && number.reserved_until ? `
+                        <div class="timestamp">
+                            Expira em: ${this.formatDate(number.reserved_until)}
                         </div>
+                    ` : ''}
+
+                    <div class="number-actions">
+                        ${number.status === 'available' ? `
+                            <button onclick="adminPanel.sellNumber(${number.number})" class="btn-sell">Vender</button>
+                            <button onclick="adminPanel.reserveNumber(${number.number})" class="btn-reserve">Reservar</button>
+                        ` : ''}
+
+                        ${number.status === 'reserved' ? `
+                            <button onclick="adminPanel.confirmPayment(${number.number})" class="btn-confirm">✅ Confirmar</button>
+                            <button onclick="adminPanel.releaseNumber(${number.number})" class="btn-release">🔓 Liberar</button>
+                        ` : ''}
+
+                        ${number.status === 'sold' ? `
+                            <button onclick="adminPanel.releaseNumber(${number.number})" class="btn-release">🔓 Liberar</button>
+                        ` : ''}
                     </div>
-                ` : ''}
-                
-                <div class="number-actions">
-                    ${number.status === 'available' ? `
-                        <button onclick="adminPanel.sellNumber(${number.number})" class="btn-sell"> Vender</button>
-                        <button onclick="adminPanel.reserveNumber(${number.number})" class="btn-reserve"> Reservar</button>
-                    ` : ''}
-                    
-                    ${number.status === 'reserved' ? `
-                        <button onclick="adminPanel.confirmPayment(${number.number})" class="btn-confirm">✅ Confirmar</button>
-                        <button onclick="adminPanel.releaseNumber(${number.number})" class="btn-release">🔓 Liberar</button>
-                    ` : ''}
-                    
-                    ${number.status === 'sold' ? `
-                        <button onclick="adminPanel.releaseNumber(${number.number})" class="btn-release">🔓 Liberar</button>
+
+                    ${number.sold_at || number.reserved_at ? `
+                        <div class="timestamp">
+                            ${number.sold_at ? `Vendido: ${this.formatDate(number.sold_at)}` : ''}
+                            ${number.reserved_at ? `Reservado: ${this.formatDate(number.reserved_at)}` : ''}
+                        </div>
                     ` : ''}
                 </div>
-                
-                ${number.soldAt || number.reservedAt ? `
-                    <div class="timestamp">
-                        ${number.soldAt ? `Vendido: ${this.formatDate(number.soldAt)}` : ''}
-                        ${number.reservedAt ? `Reservado: ${this.formatDate(number.reservedAt)}` : ''}
-                    </div>
-                ` : ''}
-            </div>
-        `}).join('');
+            `;
+        }).join('');
     }
 
     filterNumbers(numbers) {
-        if (this.currentFilter === 'all') return numbers;
-        return numbers.filter(number => number.status === this.currentFilter);
+        let filtered = [...numbers];
+
+        if (this.currentFilter !== 'all') {
+            filtered = filtered.filter(number => number.status === this.currentFilter);
+        }
+
+        if (this.searchQuery) {
+            const query = this.searchQuery.toLowerCase();
+
+            filtered = filtered.filter(number => {
+                const transaction = this.getTransactionForNumber(number);
+                const text = [
+                    number.number?.toString(),
+                    number.status,
+                    transaction?.buyer_name,
+                    transaction?.buyer_phone,
+                    transaction?.buyer_email,
+                    transaction?.id
+                ].filter(Boolean).join(' ').toLowerCase();
+
+                return text.includes(query);
+            });
+        }
+
+        return filtered;
     }
 
     updateStats(numbers) {
@@ -161,64 +263,48 @@ class AdminPanel {
             total: numbers.length
         };
 
-        // Atualizar elementos do DOM
-        const availableElement = document.getElementById('stat-available');
-        const reservedElement = document.getElementById('stat-reserved');
-        const soldElement = document.getElementById('stat-sold');
-        const totalElement = document.getElementById('stat-total');
-        const revenueElement = document.getElementById('stat-revenue');
-
-        if (availableElement) availableElement.textContent = stats.available;
-        if (reservedElement) reservedElement.textContent = stats.reserved;
-        if (soldElement) soldElement.textContent = stats.sold;
-        if (totalElement) totalElement.textContent = stats.total;
-        
-        // Calcular faturamento total (incluindo vendas manuais)
         const totalRevenue = stats.sold * this.pricePerNumber;
-        if (revenueElement) {
-            revenueElement.textContent = totalRevenue.toLocaleString('pt-BR', {
-                style: 'currency',
-                currency: 'BRL'
-            });
-        }
-        
-        console.log('Stats atualizadas:', stats, 'Faturamento:', totalRevenue);
+
+        document.getElementById('stat-available').textContent = stats.available;
+        document.getElementById('stat-reserved').textContent = stats.reserved;
+        document.getElementById('stat-sold').textContent = stats.sold;
+        document.getElementById('stat-total').textContent = stats.total;
+
+        document.getElementById('stat-revenue').textContent = totalRevenue.toLocaleString('pt-BR', {
+            style: 'currency',
+            currency: 'BRL'
+        });
     }
 
     setupEventListeners() {
-        // Filtros
         document.querySelectorAll('.filter-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
                 e.target.classList.add('active');
                 this.currentFilter = e.target.dataset.filter;
-                this.loadNumbers();
+                this.displayNumbers(this.numbers);
             });
         });
 
-        // Formulário de venda manual
         document.getElementById('manual-sale-form')?.addEventListener('submit', (e) => {
             e.preventDefault();
             this.handleManualSale();
         });
 
-        // Formulário de reserva manual
         document.getElementById('manual-reserve-form')?.addEventListener('submit', (e) => {
             e.preventDefault();
             this.handleManualReserve();
         });
 
-        // Busca
         document.getElementById('search-input')?.addEventListener('input', (e) => {
-            this.searchNumbers(e.target.value);
+            this.searchQuery = e.target.value.trim();
+            this.displayNumbers(this.numbers);
         });
 
-        // Máscara de telefone nos formulários manuais
         this.setupPhoneMask(document.getElementById('sale-phone'));
         this.setupPhoneMask(document.getElementById('reserve-phone'));
     }
 
-    // Formata o telefone como (DD) NNNNN-NNNN e bloqueia letras
     setupPhoneMask(input) {
         if (!input) return;
 
@@ -243,76 +329,85 @@ class AdminPanel {
     async sellNumber(number) {
         const name = prompt('Nome do comprador:');
         if (!name) return;
-        
+
         const phone = prompt('Telefone (opcional):') || null;
         const email = prompt('Email (opcional):') || null;
-        
+
         try {
-            await window.firestoreInitializer.addManualSale(number, name, phone, email);
+            await this.adminManualSale(number, name, phone, email);
             this.showMessage(`Número ${number} vendido para ${name}`, 'success');
+            await this.loadAll();
         } catch (error) {
             this.showMessage(`Erro ao vender número ${number}: ${error.message}`, 'error');
         }
     }
 
     async reserveNumber(number) {
-        const name = prompt('Nome da pessoa (para reserva):');
+        const name = prompt('Nome da pessoa para reserva:');
         if (!name) return;
-        
+
         const phone = prompt('Telefone (opcional):') || null;
-        const reason = prompt('Motivo da reserva (ex: pagamento em dinheiro):') || 'Reserva manual';
-        
+        const reason = prompt('Motivo da reserva:') || 'Reserva manual';
+
         try {
-            // REMOVIDO O PRAZO DE EXPIRAÇÃO - reserva por tempo indeterminado
-            await this.db.collection('raffleNumbers').doc(number.toString()).update({
-                status: 'reserved',
-                buyerInfo: {
-                    firstName: name.split(' ')[0] || '',
-                    lastName: name.split(' ').slice(1).join(' ') || '',
-                    phone: phone || 'Não informado',
-                    email: 'Não informado',
-                    manualReserve: true,
-                    reserveReason: reason
-                },
-                reservedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                reservedUntil: null, // SEM PRAZO DE EXPIRAÇÃO
-                manualReserve: true
-            });
-            
-            this.showMessage(`Número ${number} reservado para ${name} por tempo indeterminado`, 'success');
+            await this.adminManualReserve(number, name, phone, reason);
+            this.showMessage(`Número ${number} reservado para ${name}`, 'success');
+            await this.loadAll();
         } catch (error) {
             this.showMessage(`Erro ao reservar número ${number}: ${error.message}`, 'error');
         }
     }
 
     async confirmPayment(number) {
+        const numberData = this.numbers.find(n => n.number === number);
+        const transactionId = numberData?.current_transaction_id;
+
+        if (!transactionId) {
+            this.showMessage('Não encontrei o pedido relacionado a esse número.', 'error');
+            return;
+        }
+
         if (!confirm(`Confirmar pagamento do número ${number}?`)) return;
-        
+
         try {
-            await window.firestoreInitializer.confirmPayment(number);
+            const { error } = await this.client.rpc('admin_confirm_transaction', {
+                p_transaction_id: transactionId
+            });
+
+            if (error) throw error;
+
             this.showMessage(`Pagamento do número ${number} confirmado`, 'success');
+            await this.loadAll();
         } catch (error) {
+            console.error('Erro ao confirmar pagamento:', error);
             this.showMessage(`Erro ao confirmar pagamento: ${error.message}`, 'error');
         }
     }
 
     async releaseNumber(number) {
         if (!confirm(`Liberar número ${number}? Ele ficará disponível novamente.`)) return;
-        
+
         try {
-            await window.firestoreInitializer.releaseNumber(number);
+            const { error } = await this.client.rpc('admin_release_number', {
+                p_number: number
+            });
+
+            if (error) throw error;
+
             this.showMessage(`Número ${number} liberado`, 'success');
+            await this.loadAll();
         } catch (error) {
+            console.error('Erro ao liberar número:', error);
             this.showMessage(`Erro ao liberar número: ${error.message}`, 'error');
         }
     }
 
     async handleManualSale() {
-        const number = document.getElementById('sale-number').value;
-        const name = document.getElementById('sale-name').value;
-        const phone = document.getElementById('sale-phone').value || null;
-        const email = document.getElementById('sale-email').value || null;
-        
+        const number = parseInt(document.getElementById('sale-number').value);
+        const name = document.getElementById('sale-name').value.trim();
+        const phone = document.getElementById('sale-phone').value.trim() || null;
+        const email = document.getElementById('sale-email').value.trim() || null;
+
         if (!number || !name) {
             this.showMessage('Número e nome são obrigatórios', 'error');
             return;
@@ -324,22 +419,22 @@ class AdminPanel {
         }
 
         try {
-            await window.firestoreInitializer.addManualSale(parseInt(number), name, phone, email);
+            await this.adminManualSale(number, name, phone, email);
             this.showMessage(`Número ${number} vendido para ${name}`, 'success');
-            
-            // Limpar formulário
             document.getElementById('manual-sale-form').reset();
+            await this.loadAll();
         } catch (error) {
+            console.error('Erro na venda manual:', error);
             this.showMessage(`Erro ao vender número: ${error.message}`, 'error');
         }
     }
 
     async handleManualReserve() {
-        const number = document.getElementById('reserve-number').value;
-        const name = document.getElementById('reserve-name').value;
-        const phone = document.getElementById('reserve-phone').value || null;
-        const reason = document.getElementById('reserve-reason').value || 'Reserva manual';
-        
+        const number = parseInt(document.getElementById('reserve-number').value);
+        const name = document.getElementById('reserve-name').value.trim();
+        const phone = document.getElementById('reserve-phone').value.trim() || null;
+        const reason = document.getElementById('reserve-reason').value.trim() || 'Reserva manual';
+
         if (!number || !name) {
             this.showMessage('Número e nome são obrigatórios', 'error');
             return;
@@ -351,130 +446,38 @@ class AdminPanel {
         }
 
         try {
-            await window.firestoreInitializer.reserveNumberManually(
-                parseInt(number),
-                name,
-                phone,
-                reason
-            );
+            await this.adminManualReserve(number, name, phone, reason);
             this.showMessage(`Número ${number} reservado para ${name}`, 'success');
-            
-            // Limpar formulário
             document.getElementById('manual-reserve-form').reset();
+            await this.loadAll();
         } catch (error) {
+            console.error('Erro na reserva manual:', error);
             this.showMessage(`Erro ao reservar número: ${error.message}`, 'error');
         }
     }
 
-    // Visualizar comprovante
-    async viewProof(proofURL) {
-        try {
-            console.log('Abrindo comprovante:', proofURL);
-            
-            // Criar modal para visualizar comprovante
-            const modal = document.createElement('div');
-            modal.className = 'modal-overlay active';
-            modal.innerHTML = `
-                <div class="modal glass-effect" style="max-width: 600px;">
-                    <div class="modal-header">
-                        <h3 class="modal-title">Comprovante de Pagamento</h3>
-                        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
-                    </div>
-                    <div class="modal-content" style="text-align: center;">
-                        <img src="${proofURL}" alt="Comprovante" style="max-width: 100%; height: auto; border-radius: 8px;" 
-                             onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkVycm8gYW8gY2FycmVnYXI8L3RleHQ+PC9zdmc+';">
-                        <div style="margin-top: 16px;">
-                            <button class="btn btn-primary" onclick="window.open('${proofURL}', '_blank')">
-                                🔗 Abrir em Nova Aba
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            document.body.appendChild(modal);
-            
-            // Fechar modal clicando fora
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) {
-                    modal.remove();
-                }
-            });
-            
-        } catch (error) {
-            console.error('Erro ao visualizar comprovante:', error);
-            this.showMessage('Erro ao visualizar comprovante', 'error');
-        }
-    }
-
-    // Baixar comprovante
-    async downloadProof(proofURL, number) {
-        try {
-            const response = await fetch(proofURL);
-            const blob = await response.blob();
-            
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = `comprovante_numero_${number}.jpg`;
-            
-            document.body.appendChild(a);
-            a.click();
-            
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-            
-            this.showMessage('Comprovante baixado com sucesso!', 'success');
-        } catch (error) {
-            console.error('Erro ao baixar comprovante:', error);
-            this.showMessage('Erro ao baixar comprovante', 'error');
-        }
-    }
-
-    searchNumbers(query) {
-        if (!query) {
-            this.loadNumbers();
-            return;
-        }
-        
-        const cards = document.querySelectorAll('.admin-number-card');
-        cards.forEach(card => {
-            const number = card.dataset.number;
-            const text = card.textContent.toLowerCase();
-            const matches = number.includes(query) || text.includes(query.toLowerCase());
-            card.style.display = matches ? 'block' : 'none';
+    async adminManualSale(number, name, phone, email) {
+        const { error } = await this.client.rpc('admin_manual_sale', {
+            p_number: number,
+            p_buyer_name: name,
+            p_buyer_phone: phone,
+            p_buyer_email: email
         });
+
+        if (error) throw error;
     }
 
-    getStatusLabel(status) {
-        const labels = {
-            available: 'Disponível',
-            reserved: 'Reservado',
-            sold: 'Vendido'
-        };
-        return labels[status] || status;
+    async adminManualReserve(number, name, phone, reason) {
+        const { error } = await this.client.rpc('admin_manual_reserve', {
+            p_number: number,
+            p_buyer_name: name,
+            p_buyer_phone: phone,
+            p_reason: reason
+        });
+
+        if (error) throw error;
     }
 
-    formatDate(timestamp) {
-        if (!timestamp) return '';
-        const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-        return date.toLocaleString('pt-BR');
-    }
-
-    showMessage(message, type) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `admin-message ${type}`;
-        messageDiv.textContent = message;
-        
-        document.body.appendChild(messageDiv);
-        
-        setTimeout(() => {
-            messageDiv.remove();
-        }, 3000);
-    }
-
-    // Resetar a rifa (zerar todos os números) com dupla confirmação + senha
     async confirmResetRaffle() {
         const phrase = prompt('Digite RESETAR para confirmar que deseja zerar a rifa:');
 
@@ -493,40 +496,46 @@ class AdminPanel {
         if (!confirm('Tem certeza? Todos os números voltarão para disponíveis.')) return;
 
         try {
-            await window.firestoreInitializer.resetRaffle();
+            const { data, error } = await this.client.rpc('admin_reset_raffle', {});
+
+            if (error) {
+                console.error('Erro Supabase reset:', JSON.stringify(error, null, 2));
+                throw new Error(error.message || error.details || error.hint || JSON.stringify(error));
+            }
+
             this.showMessage('Rifa resetada com sucesso!', 'success');
-            await this.loadNumbers();
-            await this.loadTransactions();
+            await this.loadAll();
         } catch (error) {
-            console.error(error);
-            this.showMessage(`Erro ao resetar rifa: ${error.message}`, 'error');
+            console.error('Erro ao resetar rifa:', error);
+            this.showMessage(`Erro ao resetar rifa: ${error.message || JSON.stringify(error)}`, 'error');
         }
     }
 
-    // Exportar dados
     async exportData() {
         try {
-            const snapshot = await this.db.collection('raffleNumbers').get();
-            const numbers = [];
-            
-            snapshot.forEach(doc => {
-                const data = doc.data();
-                numbers.push({
-                    numero: data.number,
-                    status: data.status,
-                    comprador: data.buyerInfo ? `${data.buyerInfo.firstName} ${data.buyerInfo.lastName}` : '',
-                    telefone: data.buyerInfo ? data.buyerInfo.phone : '',
-                    email: data.buyerInfo ? data.buyerInfo.email : '',
-                    vendido_em: data.soldAt ? this.formatDate(data.soldAt) : '',
-                    reservado_em: data.reservedAt ? this.formatDate(data.reservedAt) : '',
-                    venda_manual: data.buyerInfo?.manualEntry ? 'Sim' : 'Não',
-                    reserva_manual: data.manualReserve ? 'Sim' : 'Não'
-                });
+            const rows = this.numbers.map(number => {
+                const transaction = this.getTransactionForNumber(number);
+
+                return {
+                    numero: number.number,
+                    status: this.getStatusLabel(number.status),
+                    comprador: transaction?.buyer_name || '',
+                    telefone: transaction?.buyer_phone || '',
+                    email: transaction?.buyer_email || '',
+                    valor: transaction?.total_value || '',
+                    status_pedido: transaction ? this.getTransactionStatusLabel(transaction.status) : '',
+                    comprovante: transaction ? this.getProofStatusLabel(transaction.proof_status) : '',
+                    vendido_em: number.sold_at ? this.formatDate(number.sold_at) : '',
+                    reservado_em: number.reserved_at ? this.formatDate(number.reserved_at) : '',
+                    expira_em: number.reserved_until ? this.formatDate(number.reserved_until) : '',
+                    venda_manual: number.manual_entry ? 'Sim' : 'Não',
+                    reserva_manual: number.manual_reserve ? 'Sim' : 'Não',
+                    pedido_id: transaction?.id || ''
+                };
             });
-            
-            const csv = this.arrayToCSV(numbers);
+
+            const csv = this.arrayToCSV(rows);
             this.downloadCSV(csv, 'rifa-dados.csv');
-            
         } catch (error) {
             this.showMessage(`Erro ao exportar dados: ${error.message}`, 'error');
         }
@@ -534,13 +543,16 @@ class AdminPanel {
 
     arrayToCSV(array) {
         if (array.length === 0) return '';
-        
+
         const headers = Object.keys(array[0]);
+
         const csvContent = [
             headers.join(','),
-            ...array.map(row => headers.map(header => `"${row[header]}"`).join(','))
+            ...array.map(row =>
+                headers.map(header => `"${String(row[header] ?? '').replace(/"/g, '""')}"`).join(',')
+            )
         ].join('\n');
-        
+
         return csvContent;
     }
 
@@ -548,12 +560,80 @@ class AdminPanel {
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         const url = URL.createObjectURL(blob);
+
         link.setAttribute('href', url);
         link.setAttribute('download', filename);
         link.style.visibility = 'hidden';
+
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+
+        URL.revokeObjectURL(url);
+    }
+
+    getStatusLabel(status) {
+        const labels = {
+            available: 'Disponível',
+            reserved: 'Reservado',
+            sold: 'Vendido'
+        };
+
+        return labels[status] || status;
+    }
+
+    getTransactionStatusLabel(status) {
+        const labels = {
+            pending: 'Pendente',
+            confirmed: 'Confirmado',
+            cancelled: 'Cancelado',
+            expired: 'Expirado',
+            archived_after_reset: 'Arquivado'
+        };
+
+        return labels[status] || status;
+    }
+
+    getProofStatusLabel(status) {
+        const labels = {
+            waiting_proof: 'Aguardando comprovante',
+            sent_whatsapp: 'Enviado via WhatsApp',
+            confirmed: 'Confirmado',
+            rejected: 'Rejeitado'
+        };
+
+        return labels[status] || status || '';
+    }
+
+    formatDate(value) {
+        if (!value) return '';
+
+        const date = new Date(value);
+
+        if (Number.isNaN(date.getTime())) return '';
+
+        return date.toLocaleString('pt-BR');
+    }
+
+    escapeHTML(value) {
+        return String(value || '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    showMessage(message, type = 'success') {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `admin-message ${type}`;
+        messageDiv.textContent = message;
+
+        document.body.appendChild(messageDiv);
+
+        setTimeout(() => {
+            messageDiv.remove();
+        }, 3000);
     }
 }
 
