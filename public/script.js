@@ -1,13 +1,4 @@
-// Dados da equipe. Troque os placeholders antes de publicar.
-const JAMBU_SITE_CONFIG = {
-    raffleName: 'Rifa Jambu Racing',
-    prizeName: '2 premios de R$ 250,00',
-    totalNumbers: 1000,
-    pricePerNumber: 3,
-    pixKey: 'equipebajanazare@gmail.com',
-    whatsappNumber: '559186065036',
-    whatsappDisplay: '+55 91 8606-5036'
-};
+// JAMBU_SITE_CONFIG agora vem de site-config.js
 
 // Firebase Integration
 class FirebaseManager {
@@ -262,27 +253,19 @@ class RaffleManager {
         try {
             console.log('Iniciando RaffleManager...');
             
-            // Inicializar Firebase primeiro
-            this.firebase = new FirebaseManager();
+            // Inicializar backend (Supabase)
+            this.firebase = new SupabaseManager();
 
             // Gerar grade visual imediatamente
             this.generateNumbersGrid();
             this.initializeEventListeners();
 
-            // Liberar reservas expiradas antes de carregar
-            await this.firebase.cleanupExpiredReservations();
-
-            // Depois carregar dados do Firebase
+            // Carregar dados do backend
             await this.loadNumbersFromFirebase();
 
             // Configurar listener em tempo real
             this.setupRealTimeListener();
 
-            // Verificar reservas expiradas periodicamente (a cada 60s)
-            setInterval(() => {
-                this.firebase?.cleanupExpiredReservations();
-            }, 60 * 1000);
-            
             this.updateDisplay();
             console.log('RaffleManager inicializado com sucesso');
         } catch (error) {
@@ -608,7 +591,7 @@ class RaffleManager {
                 
                 // Add timer for reserved numbers
                 if (numberData.status === 'reserved' && numberData.reservedUntil) {
-                    const reservedUntil = new Date(numberData.reservedUntil.seconds * 1000);
+                    const reservedUntil = new Date(numberData.reservedUntil);
                     const timeLeft = this.getTimeLeft(reservedUntil);
                     if (timeLeft > 0) {
                         const badge = document.createElement('div');
@@ -846,14 +829,14 @@ class RaffleManager {
 
     async submitPayment() {
         const buyerInfo = {
-            firstName: document.getElementById('firstName').value,
-            lastName: document.getElementById('lastName').value,
-            email: document.getElementById('email').value,
-            phone: document.getElementById('phone').value
+            firstName: document.getElementById('firstName').value.trim(),
+            lastName: document.getElementById('lastName').value.trim(),
+            email: document.getElementById('email').value.trim(),
+            phone: document.getElementById('phone').value.trim()
         };
 
         const proofMethod = 'whatsapp';
-        const selectedNumbers = Array.from(this.selectedNumbers);
+        const selectedNumbers = Array.from(this.selectedNumbers).sort((a, b) => a - b);
         const totalValue = selectedNumbers.length * this.pricePerNumber;
 
         if (!buyerInfo.firstName || !buyerInfo.lastName || !buyerInfo.phone) {
@@ -866,73 +849,45 @@ class RaffleManager {
             return;
         }
 
+        if (selectedNumbers.length === 0) {
+            this.showToast('Selecione pelo menos um número.', 'error');
+            return;
+        }
+
+        if (selectedNumbers.length > JAMBU_SITE_CONFIG.maxNumbersPerOrder) {
+            this.showToast(`Selecione no máximo ${JAMBU_SITE_CONFIG.maxNumbersPerOrder} números por pedido.`, 'error');
+            return;
+        }
+
         try {
             this.showToast('Processando seu pedido...', 'success');
 
-            // VERIFICAÇÃO DE DISPONIBILIDADE ANTES DE RESERVAR
-            let allAvailable = true;
-            const availabilityResults = [];
-            
-            for (const number of selectedNumbers) {
-                const isAvailable = await this.firebase.checkNumberAvailability(number);
-                availabilityResults.push({ number, available: isAvailable });
-                if (!isAvailable) allAvailable = false;
-            }
+            const transactionId = await this.firebase.reserveNumbers(selectedNumbers, buyerInfo);
 
-            if (!allAvailable) {
-                const unavailableNumbers = availabilityResults
-                    .filter(result => !result.available)
-                    .map(result => result.number);
-                
-                this.showToast(`Números ${unavailableNumbers.join(', ')} não estão mais disponíveis. Atualize a página.`, 'error');
-                return;
-            }
-
-            // TENTAR RESERVAR OS NÚMEROS
-            const reservationResults = [];
-            for (const number of selectedNumbers) {
-                const result = await this.firebase.tryReserveNumber(number, buyerInfo);
-                reservationResults.push({ number, success: result.success, reason: result.reason });
-                
-                if (!result.success) {
-                    this.showToast(`Erro ao reservar número ${number}: ${result.reason}`, 'error');
-                    // Reverter reservas que deram certo
-                    for (const reserved of reservationResults) {
-                        if (reserved.success) {
-                            // Aqui você poderia implementar um método para liberar a reserva
-                        }
-                    }
-                    return;
-                }
-            }
-
-            // CRIAR TRANSAÇÃO (comprovante será enviado na tela final)
-            const transactionData = {
-                numbers: selectedNumbers,
-                buyerInfo: buyerInfo,
-                totalValue: totalValue,
-                proofMethod: proofMethod,
-                proofStatus: 'waiting_proof',
-                status: 'pending'
-            };
-
-            const transactionId = await this.firebase.createTransaction(transactionData);
-
-            // MOSTRAR CONFIRMAÇÃO (com upload do comprovante)
             this.showPaymentConfirmation(transactionId, buyerInfo, selectedNumbers, proofMethod);
 
-            // LIMPAR SELEÇÃO
             this.selectedNumbers.clear();
+            await this.loadNumbersFromFirebase();
             this.updateDisplay();
 
         } catch (error) {
             console.error('Erro ao finalizar pedido:', error);
 
-            if (error.code === 'permission-denied') {
-                this.showToast('Erro de permissão. Entre em contato com o administrador.', 'error');
-            } else {
-                this.showToast('Erro ao finalizar o pedido. Tente novamente.', 'error');
+            const message = error?.message || '';
+
+            if (message.includes('não estão disponíveis') || message.includes('reservados') || message.includes('vendidos')) {
+                this.showToast('Um ou mais números já foram reservados. Escolha outros números.', 'error');
+                await this.loadNumbersFromFirebase();
+                this.updateDisplay();
+                return;
             }
+
+            if (message.includes('Telefone inválido')) {
+                this.showToast('Digite um telefone válido com DDD.', 'error');
+                return;
+            }
+
+            this.showToast('Erro ao finalizar o pedido. Tente novamente.', 'error');
         }
     }
 
